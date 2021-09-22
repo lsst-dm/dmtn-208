@@ -83,7 +83,7 @@ While executing, a client can poll the job to see if it has completed.
 Once it has completed, the client can retrieve metadata about the job, including a list of reuslts, and then retrieve each result separately.
 
 To avoid unnecessarily multipling API implementations, the sync mode will be implemented as a wrapper around the async mode using the implementation strategy described in the `UWS`_ specification.
-Specifically, a sync request will start an async job, redirect to a URL that blocks on the async job, and then redirects to the primary result URL for the async job.
+Specifically, a sync request will start an async job, redirect to a URL that blocks on the async job, and then redirect to the primary result URL for the async job.
 
 The result of a sync request should be a FITS file.
 Therefore, the primary result of an async request will also be a FITS file.
