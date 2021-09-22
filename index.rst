@@ -23,7 +23,7 @@ This design satisfies the following high-level goals:
    This will satisfy the desired feature from `DMTN-139`_ that each web service publish an OpenAPI v3 service description, since FastAPI does that automatically.
 
 #. There must be a clear division of responsibility between the service framework, which implements the IVOA API, and the data manipulation that produces the cutout.
-   The latter requires correct manipulation of scientific results and is outside the remit of the SQuaRE team, which is responsible for the service API.
+   This is so that data manipulation is applied consistently in both Rubin data processing and VO services, and so that the service takes advantage of code validated as part of the science pipeline QA process. 
 
 #. All locally-written software should be written in Python, as the preferred implementation language of the Rubin Observatory.
 
@@ -150,7 +150,7 @@ Finally, tracking of completed jobs in this approach is vulnerable to the vagari
 .. _uws-api-server: https://github.com/lsst-dm/uws-api-server
 .. _client/server Butler: https://dmtn-176.lsst.io/
 
-We did not find any other existing Python UWS server implementations (as opposed to clients, of which there are several).
+We did not find any other re-usable Python UWS server implementations (as opposed to clients, of which there are several).
 
 Task queue options
 ------------------
@@ -171,7 +171,7 @@ It should also not be too difficult to switch to Celery later if we need to.
 
 Dramatiq supports either `Redis`_, `RabbitMQ`_, or Amazon SQS as the underlying message bus.
 Both Dramatiq and Celery prefer RabbitMQ and the Celery documentation warns that Redis can lose data in some unclean shutdown scenarios.
-However, we are already using Redis as a component of the Rubin Science Platform as a backing store for the authentication system, so we will use Redis as the message bus to avoid adding a new infrastructure component.
+However, we are already using Redis as a component of the Rubin Science Platform as a backing store for the authentication system, so we will use Redis as the message bus to avoid adding a new infrastructure component until this is shown to be a reliability issue.
 
 .. _RabbitMQ: https://www.rabbitmq.com/
 
