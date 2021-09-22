@@ -13,7 +13,7 @@ serial_number: "208"
 doc_id: "DMTN-208"
 
 # Title of the document, without the series/serial designation
-doc_title: "RSP SODA service implementation strategy"
+doc_title: "RSP image cutout service implementation strategy"
 
 # Author names, ordered as a list. Each author name should be formatted as 'First Last'
 authors:
@@ -37,14 +37,18 @@ authors:
 copyright: "2021, Association of Universities for Research in Astronomy, Inc. (AURA)"
 
 # Description. A short, 1-2 sentence statemement used by document indices.
-description: "Describes the implementation strategy for the IVOA SODA service for the Rubin Science Platform."
+description: >-
+  Describes the implementation strategy for the image cutout service for the
+  Rubin Science Platform.
 
 # Abstract, if available
-# abstract: >
-#           Write your paragraph
-#           here with multiple lines.
-#
-#           You can have multiple paragraphs too.
+abstract: >
+  The IVOA SODA (Server-side Operations for Data Access) standard will be used
+  to implement an image cutout service for the Rubin Science Platform
+  following the requirements in LDM-554 4.2.3 and the architecture specified
+  in DMTN-139.  This document discusses implementation considerations and
+  proposes an implementation strategy that uses Dramatiq as a work-queuing
+  system, a pipeline task to perform the cutout, and Butler as the data store.
 
 # URL where this document is published by Read the Docs. e.g. http://sqr-001.lsst.codes
 url: "https://dmtn-208.lsst.io"

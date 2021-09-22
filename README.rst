@@ -7,14 +7,14 @@
   .. image:: https://zenodo.org/badge/doi/10.5281/zenodo.#####.svg
      :target: http://dx.doi.org/10.5281/zenodo.#####
 
-########################################
-RSP SODA service implementation strategy
-########################################
+################################################
+RSP image cutout service implementation strategy
+################################################
 
 DMTN-208
 ========
 
-Describes the implementation strategy for the IVOA SODA service for the Rubin Science Platform.
+Describes the implementation strategy for the image cutout service for the Rubin Science Platform.
 
 **Links:**
 

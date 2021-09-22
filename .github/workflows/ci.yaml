@@ -23,6 +23,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install "ltd-conveyor<2.0.0"
 
+      - name: Install graphviz
+        run: sudo apt-get install graphviz
+
       - name: Build
         run: |
           make html
