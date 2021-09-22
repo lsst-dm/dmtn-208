@@ -27,8 +27,11 @@ This design satisfies the following high-level goals:
 
 #. All locally-written software should be written in Python, as the preferred implementation language of the Rubin Observatory.
 
-#. The portions of the image cutout service that implement general IVOA standards, such as DALI and UWS components, will be designed to be separated into a library or framework and reused in future services.
+#. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
    The implementation will also serve as a model from which we will derive a template for future IVOA API services.
+
+.. _DALI: https://www.ivoa.net/documents/DALI/20170517/REC-DALI-1.1.html
+.. _UWS: https://www.ivoa.net/documents/UWS/20161024/REC-UWS-1.1-20161024.html
 
 Architecture summary
 ====================
@@ -86,8 +89,11 @@ The result of a sync request should be a FITS file.
 Therefore, the primary result of an async request will also be a FITS file.
 However, the true result of an async job will be a Butler collection including that FITS file plus associated metadata.
 Therefore, the full result list for the async job will be the FITS file (as the primary result) and the URL to the Butler collection holding the richer results.
-When client/server Butler is available, the primary result may be provided via a redirect to a Butler request to retrieve the FITS file from the collection.
+
+When client/server Butler is available, the primary result will be provided via a redirect to a signed link for the FITS file in the collection.
 Until that time, it will be a redirect to an object store URL.
+
+These URLs will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
 
 UWS implementation
 ==================
@@ -95,8 +101,6 @@ UWS implementation
 The IVOA `UWS`_ (Universal Worker Service) standard describes the behavior of async IVOA interfaces.
 The image cutout service must have an async API to support operations that may take more than a few minutes to complete, and thus requires a UWS implementation to provide the relevant API.
 We will use that implementation to perform all cutout operations.
-
-.. _UWS: https://www.ivoa.net/documents/UWS/20161024/REC-UWS-1.1-20161024.html
 
 After a survey of available UWS implementations, we chose to write a new one on top of the Python `Dramatiq`_ distributed task queue.
 

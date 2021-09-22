@@ -32,8 +32,9 @@ with Diagram(
 ):
     user = User("End user")
 
-    metadata = SQL("Task metadata")
+    metadata = SQL("Task SQL database")
     butler = Datastore("Butler repository")
+    datastore = Datastore("Object store")
 
     with Cluster("Kubernetes"):
         ingress = LoadBalancing("NGINX ingress")
@@ -48,3 +49,6 @@ with Diagram(
     ingress >> Edge(label="Auth request") >> gafaelfawr
     redis >> Edge(label="Dramatiq") >> workers >> metadata >> api
     workers >> butler >> api
+    butler >> datastore
+    user << butler
+    user - datastore
