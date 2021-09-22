@@ -183,3 +183,16 @@ Dramatiq supports either Redis or Memcache as a store for task results.
 Following the same principle, we will use Redis.
 (As discussed in :ref:`task-storage`, the task result will only be used for task metadata.
 The result of the cutout operation will be stored in the Butler, and the task metadata will separately be stored in a SQL database to satisfy the requirements for the UWS API.)
+
+XML handling
+============
+
+IVOA standards unfortunately require use of XML instead of JSON.
+Every available XML processing library for Python has `known security concerns`_ around at least denial of service attacks and, in some cases, more serious vulnerabilities.
+User-supplied XML must therefore be handled with caution.
+
+.. _known security concerns: https://docs.python.org/3/library/xml.html#xml-vulnerabilities
+
+The image cutout service will use `defusedxml`_ as a wrapper around all parsing of XML messages to address this concern.
+
+.. _defusedxml: https://pypi.org/project/defusedxml/
