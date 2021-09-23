@@ -69,9 +69,12 @@ API service
 The service frontend providing the SODA API will use the `FastAPI`_ framework.
 
 As discussed in :ref:`cutout`, an image cutout request will permit only one ``ID`` parameter, but will allow multiple filtering parameters.
+However, if multiple filtering parameters are given, all of those filter parameters must be of the same type.
+In other words, three ``CIRCLE`` parameters may be given, but not one ``CIRCLE`` parameter and one ``POLYGON`` parameter.
+
 The image cutout service requirements in `LDM-554`_ state that support for ``POLYGON`` requests is optional.
 The API will support them if the underlying pipeline task supports them.
-(Note that if ``POLYGON`` is not supported, ``POS`` also cannot be supported, since support for ``POS`` requires support for ``POLYGON``.)
+(Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS POLYGON``.)
 
 The initial implementation of the image cutout service will only return FITS files.
 However, we expect to need support for other image types such as JPEG in the future.
