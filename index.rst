@@ -36,7 +36,7 @@ This design satisfies the following high-level goals:
 Architecture summary
 ====================
 
-The image cutout service will be a FastAPI Python service running as a Kubernetes ``Deployment`` inside the Rubin Science Platform and, as with every other RSP service, using `Gafaelfawr`_ for authentication and authorization.
+The image cutout service will be a `FastAPI`_ Python service running as a Kubernetes ``Deployment`` inside the Rubin Science Platform and, as with every other RSP service, using `Gafaelfawr`_ for authentication and authorization.
 Image cutout requests will be dispatched via `Dramatiq`_ to worker processes created via a separate Kubernetes ``Deployment`` in the same cluster.
 A high-availability `Redis`_ cluster will be used as the message bus and task result store for Dramatiq.
 Image cutouts will be stored in a Butler collection alongside their associated metadata.
@@ -44,6 +44,7 @@ A request for the FITS file of the cutout will be served from that Butler collec
 Metadata about requests will be stored by the cutout workers in a SQL database, using CloudSQL for installations on Google Cloud Platform and an in-cluster PostgreSQL server elsewhere.
 The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
 
+.. _FastAPI: https://fastapi.tiangolo.com/
 .. _Gafaelfawr: https://gafaelfawr.lsst.io/
 
 The storage used by cutout results will be temporary and garbage-collected after some time.
@@ -56,6 +57,56 @@ Here is the overall design in diagram form.
    :name: Image cutout service architecture
 
    Image cutout service architecture
+
+API service
+===========
+
+The service frontend providing the SODA API will use the `FastAPI`_ framework.
+
+As discussed in :ref:`cutout`, an image cutout request will permit only one ``ID`` parameter, but will allow multiple filtering parameters.
+The image cutout service requirements in `LDM-554`_ state that support for ``POLYGON`` requests is optional.
+The API will support them if the underlying pipeline task supports them.
+(Note that if ``POLYGON`` is not supported, ``POS`` also cannot be supported, since support for ``POS`` requires support for ``POLYGON``.)
+
+The `UWS`_ specification supports providing a quote for how long an async query is expected to take before it is started.
+The initial implementation will always set the quote to ``xsi:nil``, indicating that it does not know how long the request will take.
+However, hopefully a future improvement of the service will provide real quote values based on an estimate of the complexity of the cutout request, since this information would be useful for users deciding whether to make a complex cutout request.
+
+Further considerations for UWS support and async jobs are discussed in :ref:`uws`.
+
+XML handling
+------------
+
+IVOA standards unfortunately require use of XML instead of JSON.
+Every available XML processing library for Python has `known security concerns`_ around at least denial of service attacks and, in some cases, more serious vulnerabilities.
+User-supplied XML must therefore be handled with caution.
+
+.. _known security concerns: https://docs.python.org/3/library/xml.html#xml-vulnerabilities
+
+The image cutout service will use `defusedxml`_ as a wrapper around all parsing of XML messages to address this concern.
+
+.. _defusedxml: https://pypi.org/project/defusedxml/
+
+Quotas and throttling
+---------------------
+
+The initial implementation of the image cutout service will not support either quotas or throttling.
+However, we expect support for both will be required before the production launch of the Rubin Science Platform.
+Implementation in the image cutout service (and in any other part of the API Aspect of the Rubin Science Platform) depends on an implementation of a general quota service for the RSP that has not yet been designed or built.
+
+Quotas will be implemented in the service API frontend.
+Usage information will be stored in the same SQL database used to store job metadata and used to make quota decisions.
+
+Throttling will be implemented the same way, using the same data.
+Rather than rejecting the request as with a quota limit, throttled requests may be set to a lower priority when dispatched via Dramatiq so that they will be satisfied only after higher-priority requests are complete.
+If we develop a mechanism for estimating the cost of a request, throttling may also reject expensive requests while allowing simple requests.
+
+If the service starts throttling, sync requests may not be satisfiable within a reasonable HTTP timeout interval.
+Therefore, depending on the severity of the throttling, the image cutout service may begin rejecting sync requests from a given user and requiring all requests be async.
+
+All of these decisions will be made by the API service layer when the user attempts to start a new job or makes a sync request.
+
+.. _cutout:
 
 Performing the cutout
 =====================
@@ -94,6 +145,8 @@ When client/server Butler is available, the primary result will be provided via 
 Until that time, it will be a redirect to an object store URL.
 
 These URLs will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
+
+.. _uws:
 
 UWS implementation
 ==================
@@ -184,15 +237,26 @@ Following the same principle, we will use Redis.
 (As discussed in :ref:`task-storage`, the task result will only be used for task metadata.
 The result of the cutout operation will be stored in the Butler, and the task metadata will separately be stored in a SQL database to satisfy the requirements for the UWS API.)
 
-XML handling
-============
+Aborting jobs
+-------------
 
-IVOA standards unfortunately require use of XML instead of JSON.
-Every available XML processing library for Python has `known security concerns`_ around at least denial of service attacks and, in some cases, more serious vulnerabilities.
-User-supplied XML must therefore be handled with caution.
+Neither Celery nor Dramatiq support cancellation of a task once it begins executing.
+(See `Bogdanp/dramatiq#37 <https://github.com/Bogdanp/dramatiq/issues/37>`__ for some discussion and a way to implement task cancellation as a customization to Dramatiq.)
 
-.. _known security concerns: https://docs.python.org/3/library/xml.html#xml-vulnerabilities
+It's not clear whether this feature will be necessary.
+It would be useful if a user accidentally started a resource-intensive request and then realized there was an error in the request and the results would be useless.
+However, it's not yet clear whether that case will be common enough to warrant the implementation complexity.
 
-The image cutout service will use `defusedxml`_ as a wrapper around all parsing of XML messages to address this concern.
+Therefore, the initial implementation will not support aborting a UWS job if that job has already started.
+Posting ``PHASE=ABORT`` to the job phase URI will therefore return a 303 redirect to the job URI but will not change the phase.
+(The UWS spec appears to require this behavior.)
 
-.. _defusedxml: https://pypi.org/project/defusedxml/
+Open questions
+==============
+
+#. Should the image cutout service support ``BAND``, ``TIME``, or ``POL`` filtering parameters?
+
+#. The expected way for users to use a SODA service, according to the specification, is not to discover and call the SODA service directly, but instead to follow a `DataLink`_ service descriptor in the result from a data discovery service.
+   How will we be inserting those service descriptors into the results from other API Aspect services?
+
+.. _DataLink: https://www.ivoa.net/documents/DataLink/20150617/REC-DataLink-1.0-20150617.html
