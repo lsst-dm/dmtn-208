@@ -33,6 +33,11 @@ This design satisfies the following high-level goals:
 .. _DALI: https://www.ivoa.net/documents/DALI/20170517/REC-DALI-1.1.html
 .. _UWS: https://www.ivoa.net/documents/UWS/20161024/REC-UWS-1.1-20161024.html
 
+#. The Butler should be used as the data store for all astronomy data objects.
+
+#. Cutouts should be retrieved directly from the underlying data store that holds them, rather than retrieved and then re-sent by an intermediate web server.
+   This avoids performance issues with the unnecessary middle hop and avoids having to implement such things as streaming or chunking in an intermediate server.
+
 Architecture summary
 ====================
 
@@ -155,7 +160,11 @@ However, the true result of an async job will be a Butler collection including t
 Therefore, the full result list for the async job will be the FITS file (as the primary result) and the URL to the Butler collection holding the richer results.
 
 When client/server Butler is available, the primary result will be provided via a redirect to a signed link for the FITS file in the collection.
-Until that time, it will be a redirect to an object store URL.
+Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
+
+Because the image will be retrieved directly from the underlying object store, the ``Content-Type`` metadata for files downloaded directly by the user must be correct in the object store.
+Butler currently does not set ``Content-Type`` metadata when storing objects.
+The current plan is to have ButlerURI automatically set the ``Content-Type`` based on the file extension, and ensure that files stored in a output Butler collection have appropriate extensions.
 
 These URLs will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
 
