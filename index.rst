@@ -68,11 +68,20 @@ The image cutout service requirements in `LDM-554`_ state that support for ``POL
 The API will support them if the underlying pipeline task supports them.
 (Note that if ``POLYGON`` is not supported, ``POS`` also cannot be supported, since support for ``POS`` requires support for ``POLYGON``.)
 
+The initial implementation of the image cutout service will only return FITS files.
+However, we expect to need support for other image types such as JPEG in the future.
+When that support is added, it can be requested via a ``RESPONSEFORMAT=image/jpeg`` parameter.
+
+If another image type is requested, it will be returned alongside (not replacing) the FITS image, but the requested image type will become the primary result so that sync requests will work correctly.
+If another image type is requested and multiple cutouts are requested via multiple filter parameters, each converted cutout will be a separate entry in the result list for the job.
+Sync requests for an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API.
+This will be enforced by the service frontend.
+
 The `UWS`_ specification supports providing a quote for how long an async query is expected to take before it is started.
 The initial implementation will always set the quote to ``xsi:nil``, indicating that it does not know how long the request will take.
 However, hopefully a future improvement of the service will provide real quote values based on an estimate of the complexity of the cutout request, since this information would be useful for users deciding whether to make a complex cutout request.
 
-Further considerations for UWS support and async jobs are discussed in :ref:`uws`.
+Further considerations for UWS support and async jobs are discussed in :ref:`uws-impl`.
 
 XML handling
 ------------
@@ -116,7 +125,11 @@ To ensure the cutout operation is performed by properly-vetted scientific code, 
 Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a task via a Python API.
 Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
-The primary output of a cutout operation will be a FITS file.
+The primary output of a cutout operation in the initial implementation will be a FITS file.
+
+In the future, we are likely to add support for requesting other image types.
+In this case, after generating the FITS cutout, the worker will run an additional pipeline task to convert the FITS file to the requested image format.
+If multiple cutouts were requested via multiple filtering parameters, multiple images in the requested image format will be generated and all will be part of the result set and put in the output Butler collection.
 
 A single cutout request may request multiple cutouts from the same source image.
 In the language of the SODA specification, the cutout service permits only one ``ID`` parameter but allows multiple filtering parameters.
@@ -146,7 +159,7 @@ Until that time, it will be a redirect to an object store URL.
 
 These URLs will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
 
-.. _uws:
+.. _uws-impl:
 
 UWS implementation
 ==================
