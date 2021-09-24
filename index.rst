@@ -25,6 +25,8 @@ This design satisfies the following high-level goals:
 #. There must be a clear division of responsibility between the service framework, which implements the IVOA API, and the data manipulation that produces the cutout.
    This is so that data manipulation is applied consistently in both Rubin data processing and VO services, and so that the service takes advantage of code validated as part of the science pipeline QA process. 
 
+#. The worker processes that perform the data manipulation must be long-running so that the startup costs of loading relevant Python libraries and initializing external resources do not impact the performance of image cutout requests.
+
 #. All locally-written software should be written in Python, as the preferred implementation language of the Rubin Observatory.
 
 #. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
@@ -44,13 +46,15 @@ Architecture summary
 The image cutout service will be a `FastAPI`_ Python service running as a Kubernetes ``Deployment`` inside the Rubin Science Platform and, as with every other RSP service, using `Gafaelfawr`_ for authentication and authorization.
 Image cutout requests will be dispatched via `Dramatiq`_ to worker processes created via a separate Kubernetes ``Deployment`` in the same cluster.
 A high-availability `Redis`_ cluster will be used as the message bus and task result store for Dramatiq.
-Image cutouts will be stored in a Butler collection alongside their associated metadata.
-A request for the FITS file of the cutout will be served from that Butler collection.
-Metadata about requests will be stored by the cutout workers in a SQL database, using CloudSQL for installations on Google Cloud Platform and an in-cluster PostgreSQL server elsewhere.
-The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
 
 .. _FastAPI: https://fastapi.tiangolo.com/
 .. _Gafaelfawr: https://gafaelfawr.lsst.io/
+
+Image cutouts will be stored in a Butler collection alongside their associated metadata.
+A request for the FITS file of the cutout will be served from that Butler collection.
+
+Metadata about requests will be stored by the cutout workers in a SQL database, using CloudSQL for installations on Google Cloud Platform and an in-cluster PostgreSQL server elsewhere.
+The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
 
 The storage used by cutout results will be temporary and garbage-collected after some time.
 The expected lifetime is on the order of weeks.
@@ -68,26 +72,39 @@ API service
 
 The service frontend providing the SODA API will use the `FastAPI`_ framework.
 
-As discussed in :ref:`cutout`, an image cutout request will permit only one ``ID`` parameter, but will allow multiple filtering parameters.
-However, if multiple filtering parameters are given, all of those filter parameters must be of the same type.
-In other words, three ``CIRCLE`` parameters may be given, but not one ``CIRCLE`` parameter and one ``POLYGON`` parameter.
+Input parameters
+----------------
 
 The image cutout service requirements in `LDM-554`_ state that support for ``POLYGON`` requests is optional.
 The API will support them if the underlying pipeline task supports them.
 (Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS POLYGON``.)
 
+Multiple ``ID`` parameters and multiple filter parameters may be given.
+``TIME`` and ``POL`` filter parameters will not be supported.
+``BAND`` filter parameters will not be supported in the initial implementation.
+They may become meaningful later in cutout requests from all-sky coadds and can be added at that time.
+
+If the requested cutout does not lie within the bounds of any image named in the ``ID`` parameters, the entire cutout request will fail with an appropriate error.
+
 The initial implementation of the image cutout service will only return FITS files.
 However, we expect to need support for other image types such as JPEG in the future.
 When that support is added, it can be requested via a ``RESPONSEFORMAT=image/jpeg`` parameter.
 
-If another image type is requested, it will be returned alongside (not replacing) the FITS image, but the requested image type will become the primary result so that sync requests will work correctly.
-If another image type is requested and multiple cutouts are requested via multiple filter parameters, each converted cutout will be a separate entry in the result list for the job.
-Sync requests for an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API.
-This will be enforced by the service frontend.
-
 The `UWS`_ specification supports providing a quote for how long an async query is expected to take before it is started.
 The initial implementation will always set the quote to ``xsi:nil``, indicating that it does not know how long the request will take.
 However, hopefully a future improvement of the service will provide real quote values based on an estimate of the complexity of the cutout request, since this information would be useful for users deciding whether to make a complex cutout request.
+
+API modes
+---------
+
+The SODA specification supports two API modes: sync and async.
+A sync request performs and operation and returns the result directly.
+An async operation creates a pending job, which can then be configured and executed.
+While executing, a client can poll the job to see if it has completed.
+Once it has completed, the client can retrieve metadata about the job, including a list of reuslts, and then retrieve each result separately.
+
+To avoid unnecessarily multipling API implementations, the sync mode will be implemented as a wrapper around the async mode using the implementation strategy described in the `UWS`_ specification.
+Specifically, a sync request will start an async job, redirect to a URL that blocks on the async job, and then redirect to the primary result URL for the async job.
 
 Further considerations for UWS support and async jobs are discussed in :ref:`uws-impl`.
 
@@ -128,48 +145,64 @@ All of these decisions will be made by the API service layer when the user attem
 Performing the cutout
 =====================
 
-To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a pipeline task.
+To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a task.
+For some types of cutouts, such as cutouts from PVIs that must be reconstructed from raw images, this may be a pipeline task.
 
 Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a task via a Python API.
 Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
-The primary output of a cutout operation in the initial implementation will be a FITS file.
+.. _results:
 
-In the future, we are likely to add support for requesting other image types.
-In this case, after generating the FITS cutout, the worker will run an additional pipeline task to convert the FITS file to the requested image format.
-If multiple cutouts were requested via multiple filtering parameters, multiple images in the requested image format will be generated and all will be part of the result set and put in the output Butler collection.
-
-A single cutout request may request multiple cutouts from the same source image.
-In the language of the SODA specification, the cutout service permits only one ``ID`` parameter but allows multiple filtering parameters.
-Each filtering parameter produces a separate cutout.
-The cutouts will be returned as data in a single FITS file.
-The first-specified cutout will be the Primary Array in the FITS file, and the additional cutouts will be included as additional HDUs.
+Results
+=======
 
 Result format
-=============
+-------------
 
-The SODA specification supports two API modes: sync and async.
-A sync request performs and operation and returns the result directly.
-An async operation creates a pending job, which can then be configured and executed.
-While executing, a client can poll the job to see if it has completed.
-Once it has completed, the client can retrieve metadata about the job, including a list of reuslts, and then retrieve each result separately.
+All cutout requests will create a FITS file stored in a new output Butler collection.
+The metadata about the request that would be returned as metadata for a UWS async job (see :ref:`task-storage`) will also be stored in that Butler collection so that the collection has the provenance of the cutouts.
 
-To avoid unnecessarily multipling API implementations, the sync mode will be implemented as a wrapper around the async mode using the implementation strategy described in the `UWS`_ specification.
-Specifically, a sync request will start an async job, redirect to a URL that blocks on the async job, and then redirect to the primary result URL for the async job.
+The primary output of a cutout operation in the initial implementation will be a single FITS file.
+Each filtering parameter produces a separate cutout.
+The cutout images will be stored as extensions in the result FITS file, not in the Basic FITS HDU.
 
-The result of a sync request should be a FITS file.
-Therefore, the primary result of an async request will also be a FITS file.
-However, the true result of an async job will be a Butler collection including that FITS file plus associated metadata.
-Therefore, the full result list for the async job will be the FITS file (as the primary result) and the URL to the Butler collection holding the richer results.
+The result of a sync request that does not request an alternate image format is the FITS file.
+Therefore the sync API will redirect to the FITS file result of the underlying async job.
+
+The full result of an async request will list at least two results: the FITS file, and the URL or other suitable Butler identifier for the output Butler collection that contains both that FITS file and the metadata about hte cutout request.
 
 When client/server Butler is available, the primary result will be provided via a redirect to a signed link for the FITS file in the collection.
 Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
+
+These URLs or identifiers will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
 
 Because the image will be retrieved directly from the underlying object store, the ``Content-Type`` metadata for files downloaded directly by the user must be correct in the object store.
 Butler currently does not set ``Content-Type`` metadata when storing objects.
 The current plan is to have ButlerURI automatically set the ``Content-Type`` based on the file extension, and ensure that files stored in a output Butler collection have appropriate extensions.
 
-These URLs will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
+Alternate image types
+~~~~~~~~~~~~~~~~~~~~~
+
+If another image type is requested, it will be returned alongside (not replacing) the FITS image, but the requested image type will become the primary result so that sync requests will work correctly.
+If another image type is requested and multiple cutouts are requested via multiple filter parameters, each converted cutout will be a separate entry in the result list for the job.
+
+If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file, and then the Butler collection that contains all of the outputs.
+As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
+
+Sync requests that also request an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
+This will be enforced by the service frontend.
+
+.. _[#] The result of a sync request with multiple filters and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
+   However, this would mean the output MIME type of a sync request would depend on the number of filter parameters, which is ugly, and would introduce a new requirement for generating output collections that are not Butler collections.
+   It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
+   That use case can use an async request instead.
+
+Result data retention
+---------------------
+
+The output Butler collections will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) and will be retained for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
+If the user who requested a cutout wishes to retain it, they should transfer the result Butler collection into their own or some other shared space.
+Alternately (and this is the expected usage pattern for sync requests and one-off exploratory requests), they can retrieve only the FITS file of the cutout and allow the full Butler collection to be automatically discarded later.
 
 .. _uws-impl:
 
@@ -198,16 +231,11 @@ The internal result storage is also intended for small amounts of serializable d
 The natural data store for image cutouts is a Butler collection.
 
 Therefore, each worker task will take responsibility for storing its own metadata, as well as the cutout results, in external storage.
-On success, the cutout results will be stored in a temporary Butler collection accessible only by the user requesting the cutout.
-On either success or failure, the task metadata (success or failure, any error message, and the request parameters) will be stored in a SQL database independent of the task queue system.
-If the task succeeded, the same metadata will also redundantly be stored in the output Butler collection so the collection has the provenance of the cutouts.
+On either success or failure, the task metadata (success or failure, any error message, the request parameters, and the other metadata for a job required by the UWS specification) will be stored in a SQL database independent of the task queue system.
+As described in :ref:`results`, if the request is successful, the same metadata will also be stored in the output Butler collection.
 
 The image cutout web service will then use the SQL database to retrieve information about finished jobs, and ask the task queuing system for information about still-running jobs that have not yet stored their result metadata.
 This will satisfy the UWS API requirements.
-
-The output Butler collections will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) and will be retained for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
-If the user who requested a cutout wishes to retain it, they should transfer the result Butler collection into their own or some other shared space.
-Alternately (and this is the expected usage pattern for sync requests and one-off exploratory requests), they can retrieve only the FITS file of the cutout and allow the full Butler collection to be automatically discarded later.
 
 Summary of task queuing system survey
 -------------------------------------
@@ -276,12 +304,24 @@ Therefore, the initial implementation will not support aborting a UWS job if tha
 Posting ``PHASE=ABORT`` to the job phase URI will therefore return a 303 redirect to the job URI but will not change the phase.
 (The UWS spec appears to require this behavior.)
 
+Discovery
+=========
+
+The not-yet-written IVOA Registry service for the API Aspect of the Rubin Science Platform is out of scope for this document, except to note that the image cutout service will be registered there as a SODA service once the Registry service exists.
+
+The identifiers returned in the ``obs_publisher_did`` column from ObsTAP queries in the Rubin Science Platform must be usable as ``ID`` parameter values for the image cutout service.
+In the short term, the result of ObsTAP queries will contain `DataLink`_ service descriptors for the image cutout service as a SODA service.
+Similar service descriptors will be added to the results of SIA queries once the SIA service has been written.
+This follows the pattern described in section 4.1 of the `SODA`_ specification.
+
+In the longer term, we may instead run a DataLink service and reference it in the ``access_url`` column of ObsTAP queries or via a DataLink "service descriptor" following section 4.2 of the `SODA`_ specification.
+
+.. _DataLink: https://www.ivoa.net/documents/DataLink/20150617/REC-DataLink-1.0-20150617.html
+
 Open questions
 ==============
 
-#. Should the image cutout service support ``BAND``, ``TIME``, or ``POL`` filtering parameters?
+#. We need to agree on an identifier format for Rubin Observatory data products.
+   This will be used for the ``ID`` parameter.
 
-#. The expected way for users to use a SODA service, according to the specification, is not to discover and call the SODA service directly, but instead to follow a `DataLink`_ service descriptor in the result from a data discovery service.
-   How will we be inserting those service descriptors into the results from other API Aspect services?
-
-.. _DataLink: https://www.ivoa.net/documents/DataLink/20150617/REC-DataLink-1.0-20150617.html
+#. Should we support an extension to SODA that allows the filter parameters to be provided as a VOTable?
