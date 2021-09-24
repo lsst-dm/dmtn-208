@@ -32,13 +32,13 @@ This design satisfies the following high-level goals:
 #. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
    The implementation will also serve as a model from which we will derive a template for future IVOA API services.
 
-.. _DALI: https://www.ivoa.net/documents/DALI/20170517/REC-DALI-1.1.html
-.. _UWS: https://www.ivoa.net/documents/UWS/20161024/REC-UWS-1.1-20161024.html
-
 #. The Butler should be used as the data store for all astronomy data objects.
 
 #. Cutouts should be retrieved directly from the underlying data store that holds them, rather than retrieved and then re-sent by an intermediate web server.
    This avoids performance issues with the unnecessary middle hop and avoids having to implement such things as streaming or chunking in an intermediate server.
+
+.. _DALI: https://www.ivoa.net/documents/DALI/20170517/REC-DALI-1.1.html
+.. _UWS: https://www.ivoa.net/documents/UWS/20161024/REC-UWS-1.1-20161024.html
 
 Architecture summary
 ====================
