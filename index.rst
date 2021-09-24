@@ -312,6 +312,7 @@ Discovery
 The not-yet-written IVOA Registry service for the API Aspect of the Rubin Science Platform is out of scope for this document, except to note that the image cutout service will be registered there as a SODA service once the Registry service exists.
 
 The identifiers returned in the ``obs_publisher_did`` column from ObsTAP queries in the Rubin Science Platform must be usable as ``ID`` parameter values for the image cutout service.
+
 In the short term, the result of ObsTAP queries will contain `DataLink`_ service descriptors for the image cutout service as a SODA service.
 Similar service descriptors will be added to the results of SIA queries once the SIA service has been written.
 This follows the pattern described in section 4.1 of the `SODA`_ specification.
