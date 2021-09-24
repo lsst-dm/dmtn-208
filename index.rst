@@ -199,12 +199,15 @@ This will be enforced by the service frontend.
    It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
    That use case can use an async request instead.
 
-Result data retention
----------------------
+Result storage
+--------------
 
 The output Butler collections will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) and will be retained for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
 If the user who requested a cutout wishes to retain it, they should transfer the result Butler collection into their own or some other shared space.
 Alternately (and this is the expected usage pattern for sync requests and one-off exploratory requests), they can retrieve only the FITS file of the cutout and allow the full Butler collection to be automatically discarded later.
+
+The `SODA`_ specification also allows a request to specify a VOSpace location in which to store the results, but does not specify a protocol for making that request.
+The initial implementation of the image cutout service will not support this, but it may be considered in a future version.
 
 .. _uws-impl:
 
