@@ -193,7 +193,7 @@ As with the FITS file, the images will be returned via signed links to the under
 Sync requests that also request an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
 This will be enforced by the service frontend.
 
-.. _[#] The result of a sync request with multiple filters and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
+.. [#] The result of a sync request with multiple filters and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
    However, this would mean the output MIME type of a sync request would depend on the number of filter parameters, which is ugly, and would introduce a new requirement for generating output collections that are not Butler collections.
    It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
    That use case can use an async request instead.
