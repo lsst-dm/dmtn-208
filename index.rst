@@ -169,9 +169,9 @@ The cutout images will be stored as extensions in the result FITS file, not in t
 The result of a sync request that does not request an alternate image format is the FITS file.
 Therefore the sync API will redirect to the FITS file result of the underlying async job.
 
-The full result of an async request will list at least two results: the FITS file, and the URL or other suitable Butler identifier for the output Butler collection that contains both that FITS file and the metadata about hte cutout request.
+The job representation for a successful async request will list at least two results: the FITS file, and the URL or other suitable Butler identifier for the output Butler collection that contains both that FITS file and the metadata about the cutout request.
 
-When client/server Butler is available, the primary result will be provided via a redirect to a signed link for the FITS file in the collection.
+When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
 Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
 
 These URLs or identifiers will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
@@ -190,7 +190,8 @@ The converted images will be stored in the output Butler collection alongside th
 If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file, and then the Butler collection that contains all of the outputs.
 As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
 
-Sync requests that also request an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
+The response to a sync request specifying an alternate image type will be a redirect to an object store link for the converted image of that type.
+Sync requests that request an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
 This will be enforced by the service frontend.
 
 .. [#] The result of a sync request with multiple filters and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
