@@ -148,7 +148,7 @@ Performing the cutout
 To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a task.
 For some types of cutouts, such as cutouts from PVIs that must be reconstructed from raw images, this may be a pipeline task.
 
-Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a task via a Python API.
+Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a pipeline task via a Python API.
 Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
 .. _results:
