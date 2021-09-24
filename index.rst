@@ -77,7 +77,7 @@ Input parameters
 
 The image cutout service requirements in `LDM-554`_ state that support for ``POLYGON`` requests is optional.
 The API will support them if the underlying pipeline task supports them.
-(Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS POLYGON``.)
+(Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS=POLYGON``.)
 
 Multiple ``ID`` parameters and multiple filter parameters may be given.
 ``TIME`` and ``POL`` filter parameters will not be supported.
