@@ -169,7 +169,7 @@ The cutout images will be stored as extensions in the result FITS file, not in t
 The result of a sync request that does not request an alternate image format is the FITS file.
 Therefore the sync API will redirect to the FITS file result of the underlying async job.
 
-The job representation for a successful async request will list at least two results: the FITS file, and the URL or other suitable Butler identifier for the output Butler collection that contains both that FITS file and the metadata about the cutout request.
+The job representation for a successful async request will list at least two results: the FITS file, and the URL for the output Butler collection that contains both that FITS file and the metadata about the cutout request.
 
 When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
 Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
