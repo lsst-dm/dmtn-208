@@ -183,8 +183,9 @@ The current plan is to have ButlerURI automatically set the ``Content-Type`` bas
 Alternate image types
 ~~~~~~~~~~~~~~~~~~~~~
 
-If another image type is requested, it will be returned alongside (not replacing) the FITS image, but the requested image type will become the primary result so that sync requests will work correctly.
+If another image type is requested, it will be returned alongside (not replacing) the FITS image.
 If another image type is requested and multiple cutouts are requested via multiple filter parameters, each converted cutout will be a separate entry in the result list for the job.
+The converted images will be stored in the output Butler collection alongside the FITS image and the request metadata.
 
 If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file, and then the Butler collection that contains all of the outputs.
 As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
