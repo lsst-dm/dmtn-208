@@ -169,7 +169,11 @@ The cutout images will be stored as extensions in the result FITS file, not in t
 The result of a sync request that does not request an alternate image format is the FITS file.
 Therefore the sync API will redirect to the FITS file result of the underlying async job.
 
-The job representation for a successful async request will list at least two results: the FITS file, and the URL for the output Butler collection that contains both that FITS file and the metadata about the cutout request.
+The job representation for a successful async request will list at least two results: the FITS file, and the URL for the output Butler collection [#]_ that contains both that FITS file and the metadata about the cutout request.
+
+.. [#] The concept of a URL to a Butler collection does not currently exist.
+       However, the results of a UWS job must be a list of URLs.
+       See :ref:`open-issues` for more discussion.
 
 When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
 Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
@@ -195,9 +199,9 @@ Sync requests that request an alternate image type must specify only one filter 
 This will be enforced by the service frontend.
 
 .. [#] The result of a sync request with multiple filters and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
-   However, this would mean the output MIME type of a sync request would depend on the number of filter parameters, which is ugly, and would introduce a new requirement for generating output collections that are not Butler collections.
-   It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
-   That use case can use an async request instead.
+       However, this would mean the output MIME type of a sync request would depend on the number of filter parameters, which is ugly, and would introduce a new requirement for generating output collections that are not Butler collections.
+       It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
+       That use case can use an async request instead.
 
 Result storage
 --------------
@@ -329,5 +333,11 @@ Open questions
 
 #. We need to agree on an identifier format for Rubin Observatory data products.
    This will be used for the ``ID`` parameter.
+
+#. We would like to return the full output Butler collection as one of the results of an async image cutout job.
+   This would allow the client to transfer that Butler collection to somewhere else to preserve the data complete with its metadata and provenance.
+   However, there is currently no concept of a URL to a Butler collection.
+   Should we add that as a concept, at least in the client/server Butler future?
+   How should we reference the output Butler collection in the meantime?
 
 #. Should we support an extension to SODA that allows the filter parameters to be provided as a VOTable?
