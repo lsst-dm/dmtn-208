@@ -165,6 +165,9 @@ The metadata about the request that would be returned as metadata for a UWS asyn
 The primary output of a cutout operation in the initial implementation will be a single FITS file.
 Each filtering parameter produces a separate cutout.
 The cutout images will be stored as extensions in the result FITS file, not in the Basic FITS HDU.
+This should use a ``Content-Type`` of ``application/fits`` _[#].
+
+.. [#] ``image/fits`` is not appropriate since no image is returned in the primary HDU.
 
 The result of a sync request that does not request an alternate image format is the FITS file.
 Therefore the sync API will redirect to the FITS file result of the underlying async job.
