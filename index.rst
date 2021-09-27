@@ -32,7 +32,7 @@ This design satisfies the following high-level goals:
 #. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
    The implementation will also serve as a model from which we will derive a template for future IVOA API services.
 
-#. The Butler should be used as the data store for all astronomy data objects.
+#. The Butler should be used as the underlying data store for all Rubin Observatory data objects.
 
 #. Cutouts should be retrieved directly from the underlying data store that holds them, rather than retrieved and then re-sent by an intermediate web server.
    This avoids performance issues with the unnecessary middle hop and avoids having to implement such things as streaming or chunking in an intermediate server.
@@ -50,15 +50,15 @@ A high-availability `Redis`_ cluster will be used as the message bus and task re
 .. _FastAPI: https://fastapi.tiangolo.com/
 .. _Gafaelfawr: https://gafaelfawr.lsst.io/
 
-Image cutouts will be stored in a Butler collection alongside their associated metadata.
-A request for the FITS file of the cutout will be served from that Butler collection.
-
-Metadata about requests will be stored by the cutout workers in a SQL database, using CloudSQL for installations on Google Cloud Platform and an in-cluster PostgreSQL server elsewhere.
-The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
+Image cutouts will be stored in a temporary Butler collection.
+The results of the cutout request will be served from that collection.
 
 The storage used by cutout results will be temporary and garbage-collected after some time.
 The expected lifetime is on the order of weeks.
-Users who wish to preserve the results for longer will need to transfer their data to a Butler collection in their own working space.
+Users who wish to preserve the results for longer will need to transfer their data elsewhere, such as local storage, their home directory on the Rubin Science Platform, or a personal Butler collection.
+
+Metadata about requests will be stored by the cutout workers in a SQL database, using CloudSQL for installations on Google Cloud Platform and an in-cluster PostgreSQL server elsewhere.
+The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
 
 Here is the overall design in diagram form.
 
@@ -145,11 +145,17 @@ All of these decisions will be made by the API service layer when the user attem
 Performing the cutout
 =====================
 
-To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a task.
-For some types of cutouts, such as cutouts from PVIs that must be reconstructed from raw images, this may be a pipeline task.
+To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a pipeline task.
+This will allow multi-step cutout operations, such as cutouts from PVIs that must be reconstructed from raw images.
+
+The cutout pipeline task is responsible for propagating provenance metadata from the source data and the cutout parameters into the resulting FITS file, or into appropriate metadata in the output files for other image types.
+As a future enhancement, we also hope to offer the provenance data in VOTable form as a separate output from the image cutout service, served from the same output Butler collection.
+See `PipelineTask-level provenance in DMTN-185 <https://dmtn-185.lsst.io/#pipelinetask-level-provenance>`__ for more discussion.
 
 Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a pipeline task via a Python API.
 Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
+
+If performance requires bypassing pipeline tasks, the image cutout workers will need an equivalent API that calls tasks directly and stores equivalent provenance information.
 
 Once there is a client/server Butler service, Butler operations to perform the cutout and to store the cutout result will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049`_.
 
@@ -163,27 +169,26 @@ Results
 Result format
 -------------
 
-All cutout requests will create a FITS file stored in a new output Butler collection.
-The metadata about the request that would be returned as metadata for a UWS async job (see :ref:`task-storage`) will also be stored in that Butler collection so that the collection has the provenance of the cutouts.
+All cutout requests will create a FITS file.
+A cutout request may also create additional output files if alternate image types are requested.
+As a future enhancement, all cutout requests will also create a VOTable with provenance information.
 
 The primary output of a cutout operation in the initial implementation will be a single FITS file.
-Each filtering parameter produces a separate cutout.
+Each filtering parameter produces a separate cutout image.
 The cutout images will be stored as extensions in the result FITS file, not in the Basic FITS HDU.
-This should use a ``Content-Type`` of ``application/fits`` _[#].
+This output should use a ``Content-Type`` of ``application/fits`` _[#].
 
 .. [#] ``image/fits`` is not appropriate since no image is returned in the primary HDU.
 
 The result of a sync request that does not request an alternate image format is the FITS file.
 Therefore the sync API will redirect to the FITS file result of the underlying async job.
 
-The job representation for a successful async request will list at least two results: the FITS file, and the URL for the output Butler collection [#]_ that contains both that FITS file and the metadata about the cutout request.
-
-.. [#] The concept of a URL to a Butler collection does not currently exist.
-       However, the results of a UWS job must be a list of URLs.
-       See :ref:`open-issues` for more discussion.
+The job representation for a successful async request will list the FITS file as the only result in the initial implementation.
+As a future enhancement, it will also list the VOTable with provenance information as a secondary output.
 
 When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
 Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
+The same will be done for the VOTable and for alternate image output formats.
 
 These URLs or identifiers will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
 
@@ -196,7 +201,7 @@ Alternate image types
 
 If another image type is requested, it will be returned alongside (not replacing) the FITS image.
 If another image type is requested and multiple cutouts are requested via multiple filter parameters, each converted cutout will be a separate entry in the result list for the job.
-The converted images will be stored in the output Butler collection alongside the FITS image and the request metadata.
+The converted images will be stored in the output Butler collection alongside the FITS image and the provenance information.
 
 If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file, and then the Butler collection that contains all of the outputs.
 As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
@@ -214,8 +219,7 @@ Result storage
 --------------
 
 The output Butler collections will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) and will be retained for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
-If the user who requested a cutout wishes to retain it, they should transfer the result Butler collection into their own or some other shared space.
-Alternately (and this is the expected usage pattern for sync requests and one-off exploratory requests), they can retrieve only the FITS file of the cutout and allow the full Butler collection to be automatically discarded later.
+If the user who requested a cutout wishes to retain it, they should store the outputs in local storage, their home directory in the Rubin Science Platform, a personal Butler collection, or some other suitable location.
 
 The `SODA`_ specification also allows a request to specify a VOSpace location in which to store the results, but does not specify a protocol for making that request.
 The initial implementation of the image cutout service will not support this, but it may be considered in a future version.
@@ -247,9 +251,7 @@ The internal result storage is also intended for small amounts of serializable d
 The natural data store for image cutouts is a Butler collection.
 
 Therefore, each worker task will take responsibility for storing its own metadata, as well as the cutout results, in external storage.
-On either success or failure, the task metadata (success or failure, any error message, the request parameters, and the other metadata for a job required by the UWS specification) will be stored in a SQL database independent of the task queue system.
-As described in :ref:`results`, if the request is successful, the same metadata will also be stored in the output Butler collection.
-
+The task metadata (success or failure, any error message, the request parameters, and the other metadata for a job required by the UWS specification) will be stored in a SQL database independent of the task queue system.
 The image cutout web service will then use the SQL database to retrieve information about finished jobs, and ask the task queuing system for information about still-running jobs that have not yet stored their result metadata.
 This will satisfy the UWS API requirements.
 
@@ -340,11 +342,5 @@ Open questions
 
 #. We need to agree on an identifier format for Rubin Observatory data products.
    This will be used for the ``ID`` parameter.
-
-#. We would like to return the full output Butler collection as one of the results of an async image cutout job.
-   This would allow the client to transfer that Butler collection to somewhere else to preserve the data complete with its metadata and provenance.
-   However, there is currently no concept of a URL to a Butler collection.
-   Should we add that as a concept, at least in the client/server Butler future?
-   How should we reference the output Butler collection in the meantime?
 
 #. Should we support an extension to SODA that allows the filter parameters to be provided as a VOTable?
