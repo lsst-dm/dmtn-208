@@ -151,6 +151,10 @@ For some types of cutouts, such as cutouts from PVIs that must be reconstructed 
 Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a pipeline task via a Python API.
 Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
+Once there is a client/server Butler service, Butler operations to perform the cutout and to store the cutout result will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049`_.
+
+.. _SQR-049: https://sqr-049.lsst.io/#internal-tokens
+
 .. _results:
 
 Results
