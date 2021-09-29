@@ -259,6 +259,8 @@ The task metadata (success or failure, any error message, the request parameters
 The image cutout web service will then use the SQL database to retrieve information about finished jobs, and ask the task queuing system for information about still-running jobs that have not yet stored their result metadata.
 This will satisfy the UWS API requirements.
 
+This means we will not need the result storage functionality of the task queuing system.
+
 Summary of task queuing system survey
 -------------------------------------
 
@@ -308,9 +310,14 @@ However, we are already using Redis as a component of the Rubin Science Platform
 .. _RabbitMQ: https://www.rabbitmq.com/
 
 Dramatiq supports either Redis or Memcache as a store for task results.
-Following the same principle, we will use Redis.
-(As discussed in :ref:`task-storage`, the task result will only be used for task metadata.
-The result of the cutout operation will be stored in the Butler, and the task metadata will separately be stored in a SQL database to satisfy the requirements for the UWS API.)
+However, since we need an external database to store task metadata anyway, we don't need to store task results within the task queue system.
+(See :ref:`task-storage` for more details.)
+
+Neither Celery nor Dramatiq support asyncio natively.
+Dramatiq is unlikely to add support since the maintainer `is not a fan of asyncio <https://github.com/Bogdanp/dramatiq/issues/238>`__.
+For the time being, we'll enqueue tasks synchronously.
+Redis should be extremely fast under normal circumstances, so this hopefully won't cause problems.
+If it does, we can consider other options, such as the ``asgiref.sync_to_async`` decorator.
 
 Aborting jobs
 -------------
