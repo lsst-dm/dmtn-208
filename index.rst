@@ -187,10 +187,14 @@ The job representation for a successful async request will list the FITS file as
 As a future enhancement, it will also list the VOTable with provenance information as a secondary output.
 
 When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
-Until that time, it will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
+Signed URLs are temporary and may have a lifetime shorter than the output Butler collection, so the image cutout service will ask the client/server Butler for new signed URL each time the job results are requested (possibly with caching of up to an hour).
+The URL of the job result may therefore change, although the underlying objects will stay the same, and the client should not save the URL for much later use.
+
+Until client/server Butler is available, the URL of the FITS file will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
 The same will be done for the VOTable and for alternate image output formats.
 
-These URLs or identifiers will be stored in the SQL database that holds metadata about async jobs and retrieved from there by the API service to construct the UWS job status response.
+The SQL database that holds metadata about async jobs will hold the information required to request or reconstruct the URL of the FITS file.
+That information will be retrieved from there by the API service and used to construct the UWS job status response.
 
 Because the image will be retrieved directly from the underlying object store, the ``Content-Type`` metadata for files downloaded directly by the user must be correct in the object store.
 Butler currently does not set ``Content-Type`` metadata when storing objects.
