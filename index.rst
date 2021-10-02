@@ -84,8 +84,6 @@ Multiple ``ID`` parameters and multiple filter parameters may be given.
 ``BAND`` filter parameters will not be supported in the initial implementation.
 They may become meaningful later in cutout requests from all-sky coadds and can be added at that time.
 
-If the requested cutout does not lie within the bounds of any image named in the ``ID`` parameters, the entire cutout request will fail with an appropriate error.
-
 The initial implementation of the image cutout service will only return FITS files.
 However, we expect to need support for other image types such as JPEG in the future.
 When that support is added, it can be requested via a ``RESPONSEFORMAT=image/jpeg`` parameter.
@@ -355,3 +353,8 @@ Open questions
    This will be used for the ``ID`` parameter.
 
 #. Should we support an extension to SODA that allows the filter parameters to be provided as a VOTable?
+
+#. SODA requires each cutout parameter return a separate result in the async API, and also requires that each cutout parameter that is invalid given the data ID return, as a result, a ``text/plain`` document that starts with an error label.
+   This doesn't seem like what we want.
+   We would rather return a single FITS file with all cutouts included, and if any of the cutout parameters are invalid given the data ID, fail the entire job with an error, rather than making the client intuit an error from the MIME type of the result.
+   Should we break the standard here?
