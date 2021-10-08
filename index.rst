@@ -159,6 +159,70 @@ Once there is a client/server Butler service, Butler operations to perform the c
 
 .. _SQR-049: https://sqr-049.lsst.io/#internal-tokens
 
+Interface contract
+------------------
+
+Also see `DM-32097`_.
+
+.. _DM-32097: https://jira.lsstcorp.org/browse/DM-32097
+
+Input
+~~~~~
+
+- One or more data IDs, as strings, that uniquely identify the source image or images on which to perform the cutout.
+  These are opaque to the image cutout service but must match the data IDs returned by ObsTAP queries, SIA, etc.
+  The requirements for the image cutout service specify that the data ID may refer to a raw, PVI, compressed-PVI, diffim, or coadded image.
+
+- One or more cutout filters. There are three possible filter types:
+  - Circle, specified as an astropy SkyCoord in ICRS for the center and an astropy Angle for the radius.
+  - Polygon, specified as an astropy SkyCoord containing a sequence of vertices in ICRS.
+    The line from the last vertex to the first vertex is implicit.
+    Vertices must be ordered such that the polygon winding direction is counter-clockwise (when viewed from the origin toward the sky), but the frontend doesn't know how to check this so the backend may need to.
+  - Range, specified as a pair of minimum and maximum ra values and a pair of minimum and maximum dec values, in ICRS, as doubles.
+    The minimums may be ``-Inf`` and/or the maximums may be ``+Inf`` to indicate an unbounded range extending to the boundaries of the image.
+
+The semantics of multiple data IDs and multiple filters are combinatoric: in other words, the requested output is one cutout for each combination of data ID and filter.
+So two data IDs and a set of filters consisting of two circles and one polygon would produce six cutouts: two circles and one polygon on both of the two data IDs.
+
+Polygon is optional in our formal requirements, but range filters cannot be advertised with an IVOA capability unless we implement polygons, so it would be good if we could do so.
+
+We expect, in the future, to allow the client to also specify the output image format and thus request a JPEG image (or whatever else makes sense).
+But for the initial implementation we need only support FITS output.
+
+Output
+~~~~~~
+
+Output should be in FITS format.
+
+In the final implementation, the FITS file should contain metadata recording the input parameters and time at which the cutout was performed, for provenance purposes.
+This isn't required in the initial implementation.
+
+There is some controversy currently over whether to return a single FITS file with HDUs for each cutout, or to return N separate FITS files.
+The current SODA standard requires the latter, but we had thought the former would be easier to work with.
+We're still working that out; until we have a decision, whichever is easiest is fine (but be aware that it might change).
+
+The SODA service needs to return a URL to the output.
+In the longer term when we have client/server Butler, the intent is for the cutout backend to return the location of the cutout in a Butler collection and then the frontend will ask the Butler server for a signed URL to that image.
+In the interim, until we have client/server Butler, the easiest approach is probably to store the cutout in a GCS bucket, under a random name, using Butler, and then the frontend can ask Butler for the URL to the underlying file.
+
+Therefore, the output should be stored in a Butler collection backed by a GCS bucket.
+SQuaRE can do the GCS setup if there isn't something already available.
+
+A cutout area that's not fully contained within the specified image is an error (except for unbounded ranges).
+The current IVOA standard requires that all other cutouts still be done even if some of them are errors for this reason.
+I think this is less useful than failing the entire operation if there are any errors, but this is still being discussed.
+For the initial implementation, it may be easier to error out if any filter is inconsistent with any image, but be aware that this could change.
+
+Errors can be delivered in whatever form is easiest as long as the frontend can recover the details of the error.
+(For example, an exception is fine as long as the user-helpful details of the error are in the exception.)
+
+Other notes
+~~~~~~~~~~~
+
+The long-term goal is to have some number of image cutout backends that are busily performing cutouts as fast as they can, since we expect this to be a popular service with a high traffic volume.
+Therefore, as much as possible, we want to do setup work in advance so that each cutout will be faster.
+For example, we want cutouts to be done in a long-running process that pays the cost of importing a bunch of Python libraries just once during startup, not for each cutout.
+
 .. _results:
 
 Results
@@ -174,7 +238,7 @@ As a future enhancement, all cutout requests will also create a VOTable with pro
 The primary output of a cutout operation in the initial implementation will be a single FITS file.
 Each filtering parameter produces a separate cutout image.
 The cutout images will be stored as extensions in the result FITS file, not in the Basic FITS HDU.
-This output should use a ``Content-Type`` of ``application/fits`` _[#].
+This output should use a ``Content-Type`` of ``application/fits`` [#]_.
 
 .. [#] ``image/fits`` is not appropriate since no image is returned in the primary HDU.
 
