@@ -75,13 +75,16 @@ The service frontend providing the SODA API will use the `FastAPI`_ framework.
 Input parameters
 ----------------
 
+SODA calls parameters that control the shape of the cutout "filtering parameters" or "filters."
+The word filter is overloaded in astronomy, so this document instead calls those parameters "stencils."
+
 The image cutout service requirements in `LDM-554`_ state that support for ``POLYGON`` requests is optional.
 The API will support them if the underlying pipeline task supports them.
 (Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS=POLYGON``.)
 
-Multiple ``ID`` parameters and multiple filter parameters may be given.
-``TIME`` and ``POL`` filter parameters will not be supported.
-``BAND`` filter parameters will not be supported in the initial implementation.
+Multiple ``ID`` parameters and multiple stencil parameters may be given.
+``TIME`` and ``POL`` stencil parameters will not be supported.
+``BAND`` stencil parameters will not be supported in the initial implementation.
 They may become meaningful later in cutout requests from all-sky coadds and can be added at that time.
 
 The initial implementation of the image cutout service will only return FITS files.
@@ -106,18 +109,19 @@ Specifically, a sync request will start an async job, redirect to a URL that blo
 
 Further considerations for UWS support and async jobs are discussed in :ref:`uws-impl`.
 
-XML handling
-------------
+Permission model
+----------------
 
-IVOA standards unfortunately require use of XML instead of JSON.
-Every available XML processing library for Python has `known security concerns`_ around at least denial of service attacks and, in some cases, more serious vulnerabilities.
-User-supplied XML must therefore be handled with caution.
+For the stateful async protocol, all created jobs are associated with a user.
+Only that user has access to the jobs they create.
+Attempts to access jobs created by other users will return authorization errors.
 
-.. _known security concerns: https://docs.python.org/3/library/xml.html#xml-vulnerabilities
+In the initial implementation, there is no concept of an administrator role or special async API access for administrators.
+Administrators can directly inspect the database if needed, or can impersonate a user if necessary.
+Administrative access to the API without impersonation may be added in future versions if this proves useful.
 
-The image cutout service will use `defusedxml`_ as a wrapper around all parsing of XML messages to address this concern.
-
-.. _defusedxml: https://pypi.org/project/defusedxml/
+Access control is done via Gafaelfawr_.
+Image cutout service access is controlled via the ``read:image`` scope.
 
 Quotas and throttling
 ---------------------
@@ -173,7 +177,7 @@ Input
   These are opaque to the image cutout service but must match the data IDs returned by ObsTAP queries, SIA, etc.
   The requirements for the image cutout service specify that the data ID may refer to a raw, PVI, compressed-PVI, diffim, or coadded image.
 
-- One or more cutout filters. There are three possible filter types:
+- One or more cutout stencils. There are three possible stencil types:
   - Circle, specified as an astropy SkyCoord in ICRS for the center and an astropy Angle for the radius.
   - Polygon, specified as an astropy SkyCoord containing a sequence of vertices in ICRS.
     The line from the last vertex to the first vertex is implicit.
@@ -181,10 +185,10 @@ Input
   - Range, specified as a pair of minimum and maximum ra values and a pair of minimum and maximum dec values, in ICRS, as doubles.
     The minimums may be ``-Inf`` and/or the maximums may be ``+Inf`` to indicate an unbounded range extending to the boundaries of the image.
 
-The semantics of multiple data IDs and multiple filters are combinatoric: in other words, the requested output is one cutout for each combination of data ID and filter.
-So two data IDs and a set of filters consisting of two circles and one polygon would produce six cutouts: two circles and one polygon on both of the two data IDs.
+The semantics of multiple data IDs and multiple stencils are combinatoric: in other words, the requested output is one cutout for each combination of data ID and stencil
+So two data IDs and a set of stencils consisting of two circles and one polygon would produce six cutouts: two circles and one polygon on both of the two data IDs.
 
-Polygon is optional in our formal requirements, but range filters cannot be advertised with an IVOA capability unless we implement polygons, so it would be good if we could do so.
+Polygon is optional in our formal requirements, but range stencils cannot be advertised with an IVOA capability unless we implement polygons, so it would be good if we could do so.
 
 We expect, in the future, to allow the client to also specify the output image format and thus request a JPEG image (or whatever else makes sense).
 But for the initial implementation we need only support FITS output.
@@ -211,7 +215,7 @@ SQuaRE can do the GCS setup if there isn't something already available.
 A cutout area that's not fully contained within the specified image is an error (except for unbounded ranges).
 The current IVOA standard requires that all other cutouts still be done even if some of them are errors for this reason.
 I think this is less useful than failing the entire operation if there are any errors, but this is still being discussed.
-For the initial implementation, it may be easier to error out if any filter is inconsistent with any image, but be aware that this could change.
+For the initial implementation, it may be easier to error out if any stencil is inconsistent with any image, but be aware that this could change.
 
 Errors can be delivered in whatever form is easiest as long as the frontend can recover the details of the error.
 (For example, an exception is fine as long as the user-helpful details of the error are in the exception.)
@@ -236,7 +240,7 @@ A cutout request may also create additional output files if alternate image type
 As a future enhancement, all cutout requests will also create a VOTable with provenance information.
 
 The primary output of a cutout operation in the initial implementation will be a single FITS file.
-Each filtering parameter produces a separate cutout image.
+Each stencil parameter produces a separate cutout image.
 The cutout images will be stored as extensions in the result FITS file, not in the Basic FITS HDU.
 This output should use a ``Content-Type`` of ``application/fits`` [#]_.
 
@@ -266,18 +270,18 @@ Alternate image types
 ~~~~~~~~~~~~~~~~~~~~~
 
 If another image type is requested, it will be returned alongside (not replacing) the FITS image.
-If another image type is requested and multiple cutouts are requested via multiple filter parameters, each converted cutout will be a separate entry in the result list for the job.
+If another image type is requested and multiple cutouts are requested via multiple stencil parameters, each converted cutout will be a separate entry in the result list for the job.
 The converted images will be stored in the output Butler collection alongside the FITS image and the provenance information.
 
 If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file, and then the Butler collection that contains all of the outputs.
 As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
 
 The response to a sync request specifying an alternate image type will be a redirect to an object store link for the converted image of that type.
-Sync requests that request an alternate image type must specify only one filter parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
+Sync requests that request an alternate image type must specify only one stencil parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
 This will be enforced by the service frontend.
 
-.. [#] The result of a sync request with multiple filters and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
-       However, this would mean the output MIME type of a sync request would depend on the number of filter parameters, which is ugly, and would introduce a new requirement for generating output collections that are not Butler collections.
+.. [#] The result of a sync request with multiple stencils and an alternate image type could instead be a collection (such as a ZIP file) holding multiple images.
+       However, this would mean the output MIME type of a sync request would depend on the number of stencil parameters, which is ugly, and would introduce a new requirement for generating output collections that are not Butler collections.
        It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
        That use case can use an async request instead.
 
@@ -416,7 +420,7 @@ Open questions
 #. We need to agree on an identifier format for Rubin Observatory data products.
    This will be used for the ``ID`` parameter.
 
-#. Should we support an extension to SODA that allows the filter parameters to be provided as a VOTable?
+#. Should we support an extension to SODA that allows the stencil parameters to be provided as a VOTable?
 
 #. SODA requires each cutout parameter return a separate result in the async API, and also requires that each cutout parameter that is invalid given the data ID return, as a result, a ``text/plain`` document that starts with an error label.
    This doesn't seem like what we want.
