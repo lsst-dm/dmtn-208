@@ -29,6 +29,10 @@ This design satisfies the following high-level goals:
 
 #. All locally-written software should be written in Python, as the preferred implementation language of the Rubin Observatory.
 
+#. The service frontend must not require the full Rubin Observatory stack.
+   This causes too many complications for building containers and coordinating Python package versions.
+   Only the worker processes should require the stack, and should have a minimum of additional dependencies to limit how many Python modules we need to add to or layer on top of the stack.
+
 #. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
    The implementation will also serve as a model from which we will derive a template for future IVOA API services.
 
@@ -52,6 +56,10 @@ A high-availability `Redis`_ cluster will be used as the message bus and task re
 
 Image cutouts will be stored in a temporary Butler collection.
 The results of the cutout request will be served from that collection.
+
+The Dramatiq workers will be separated into two pools using different queues.
+One will perform the cutouts and will run on the stack container.
+The other, smaller pool will perform database housekeeping and store results or errors.
 
 The storage used by cutout results will be temporary and garbage-collected after some time.
 The expected lifetime is on the order of weeks.
@@ -82,7 +90,9 @@ The image cutout service requirements in `LDM-554`_ state that support for ``POL
 The API will support them if the underlying pipeline task supports them.
 (Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS=POLYGON``.)
 
-Multiple ``ID`` parameters and multiple stencil parameters may be given.
+The initial version of the cutout service will only support a single ``ID`` parameter and a single stencil parameter.
+It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting do not match our needs.
+
 ``TIME`` and ``POL`` stencil parameters will not be supported.
 ``BAND`` stencil parameters will not be supported in the initial implementation.
 They may become meaningful later in cutout requests from all-sky coadds and can be added at that time.
@@ -102,10 +112,10 @@ The SODA specification supports two API modes: sync and async.
 A sync request performs and operation and returns the result directly.
 An async operation creates a pending job, which can then be configured and executed.
 While executing, a client can poll the job to see if it has completed.
-Once it has completed, the client can retrieve metadata about the job, including a list of reuslts, and then retrieve each result separately.
+Once it has completed, the client can retrieve metadata about the job, including a list of results, and then retrieve each result separately.
 
-To avoid unnecessarily multipling API implementations, the sync mode will be implemented as a wrapper around the async mode using the implementation strategy described in the `UWS`_ specification.
-Specifically, a sync request will start an async job, redirect to a URL that blocks on the async job, and then redirect to the primary result URL for the async job.
+To avoid unnecessarily multiplying API implementations, the sync mode will be implemented as a wrapper around the async mode.
+Specifically, a sync request will start an async job, wait for that job to complete, and then redirect to the primary result URL for the async job.
 
 Further considerations for UWS support and async jobs are discussed in :ref:`uws-impl`.
 
@@ -147,24 +157,116 @@ All of these decisions will be made by the API service layer when the user attem
 Performing the cutout
 =====================
 
-To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a pipeline task.
+To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a pipeline.
 This will allow multi-step cutout operations, such as cutouts from PVIs that must be reconstructed from raw images.
 
-The cutout pipeline task is responsible for propagating provenance metadata from the source data and the cutout parameters into the resulting FITS file, or into appropriate metadata in the output files for other image types.
-As a future enhancement, we also hope to offer the provenance data in VOTable form as a separate output from the image cutout service, served from the same output Butler collection.
-See `PipelineTask-level provenance in DMTN-185 <https://dmtn-185.lsst.io/#pipelinetask-level-provenance>`__ for more discussion.
+The cutout pipeline is responsible for propagating provenance metadata from the source data and the cutout parameters into the resulting FITS file, or into appropriate metadata in the output files for other image types.
+See `PipelineTask-level provenance in DMTN-185 <https://dmtn-185.lsst.io/#pipelinetask-level-provenance>`__ for discussion of provenance metadata in general.
 
-Currently, pipeline tasks must be invoked via the command line, but the expectation is that pipelines will add a way of invoking a pipeline task via a Python API.
-Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
-
-If performance requires bypassing pipeline tasks, the image cutout workers will need an equivalent API that calls tasks directly and stores equivalent provenance information.
+Currently, pipelines must be invoked via the command line, but the expectation is that the project will add a way of invoking a pipeline via a Python API.
+Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, dispatching each to a pre-built pipeline, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
 Once there is a client/server Butler service, Butler operations to perform the cutout and to store the cutout result will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049`_.
 
 .. _SQR-049: https://sqr-049.lsst.io/#internal-tokens
 
+.. _task-mapping:
+
+Mapping cutout requests to pipelines
+------------------------------------
+
+We expect cutout requests to map to different pipelines depending on the details of the request.
+For example, the ``ID`` may specify a virtual data product, which may require a pipelines to construct that virtual data product before performing a cutout.
+We may also want to implement each cutout stencil type as a separate pipeline.
+
+Each possible pipeline will have its own registered Dramatiq actor.
+The input parameters to that pipeline will be the arguments to that actor.
+Because Dramatiq is used to execute the actor, all arguments must be JSON-serializable (so, for example, we will pass Python floats rather than Astropy SkyCoord objects).
+The actor will then store the input parameters into an input Butler collection for the pipeline, if necessary.
+
+The logic to map an incoming SODA request to a pipeline (and thus its actor) and input parameters will be done in the API frontend as the request is received so that any errors can be immediately reported to the user.
+This mapping may require retrieving metadata about the dataset specified by the ``ID`` parameter from another service (probably the Butler).
+
+.. _worker-queue:
+
+Worker queue design
+-------------------
+
+The worker processes run in a container built on top of the Rubin Observatory stack.
+Unfortunately, stack containers are so large that they cannot be constructed in GitHub Actions.
+This makes building new containers annoyingly difficult, so we want to minimize how frequently it needs to be done.
+Ideally, we would avoid creating a new derivative container entirely.
+
+Once a job has been created via the frontend and queued, workers must perform the following actions:
+
+- Parse and store the input parameters in a format suitable for performing the cutout with a pipeline task.
+- Update the UWS job status to indicate execution is in progress.
+- Perform the cutout, storing the results in an output Butler collection.
+- Update the UWS job status to indicate execution is complete and store a pointer to the output Butler collection.
+- If the cutout job failed, instead update the UWS job to indicate the job errored, and store the error message in the UWS database.
+
+The simplest design would be to give the worker credentials for the UWS database and have it perform all of those actions directly, via a common UWS wrapper around an arbitrary worker process.
+However, the cutout work has to run in the stack, but the wrapper would need access to the database schema, the input parameter parser, and all of the resulting dependencies.
+This would require adding a significant amount of code on top of the stack container, which is not desirable for the reasons mentioned above.
+
+A slightly more complex queuing structure can address this problem.
+Instead of a single cutout function (an "actor" in the Dramatiq vocabulary), define four actors (names given in parentheses):
+
+#. The cutout actor itself, which takes a (JSON-serializable) list of arguments specifying the ``ID`` and cutout stencil [#]_.  (``cutout``)
+#. An actor that marks the UWS job as executing.  (``job_start``)
+#. An actor that marks the UWS job as complete and saves a pointer to the Butler output collection.  (``job_complete``)
+#. An actor that marks the UWS job as failed and saves the error message in the UWS database.  (``job_failed``)
+
+.. [#] This is a minor simplification.
+       There will likely be multiple cutout actors since there will be a one-to-one correspondence between cutout actors and pipeline tasks.
+       The frontend will decide which actor to execute given the input parameters, as discussed in :ref:`task-mapping`.
+
+The first actor will use the ``cutout`` queue.
+The other three actors will use the ``uws`` queue.
+Now, only the first actor needs to be run in a stack container.
+The workflow looks like this:
+
+#. Parse the input parameters in the frontend, determine the specific cutout actor to run, and pass them as a JSON-serializable list of arguments to the cutout actor.
+   Include the job ID as a parameter.
+#. As part of that message, set ``on_success`` and ``on_failure`` `Dramatiq callbacks`_ pointing to ``job_complete`` and ``job_failed``, respectively.
+#. As its first action, the cutout actor sends a message to ``job_start`` with the job ID and timestamp.
+#. When the cutout actor finishes, either ``job_complete`` or ``job_failed`` will be called automatically.
+
+.. _Dramatiq callbacks: https://dramatiq.io/cookbook.html#callbacks
+
+Then, run two pools of workers.
+One is configured to only watch the ``cutout`` queue and is the one that does the actual work.
+These workers will run on a stack container.
+The other, smaller pool of workers will only watch the ``uws`` queue and do database housekeeping.
+
+With this separation, the frontend and ``uws`` queue workers can share code, including the database schema, but only need a stub for the ``cutout`` actor.
+Similarly, the ``cutout`` actor only needs to contain the code for performing the cutout, and can contain only stubs for the ``job_start``, ``job_complete``, and ``job_failed`` actors.
+
+The Dramatiq result store will be used to pass a pointer to Butler output collection from the ``cutout`` actor to the ``job_complete`` actor, and any exceptions from the ``cutout`` actor to the ``job_failed`` actor.
+
+Worker containers
+-----------------
+
+Given this worker queue design, the worker container can be a generic stack container plus the following:
+
+#. The results of ``pip install dramatiq[redis]``, so that the worker can talk to the message queue and result store.
+#. The code for performing the cutout.
+   This is expected to be a single (short) file that performs any necessary setup for the pipeline task.
+
+For the initial implementation, we will create a new virtualenv in a Kubernetes ``emptyDir`` temporary file system on container startup, using the stack Python, and ``pip install dramatiq[redis]`` in that virtualenv.
+The code for the cutout actor (and the stubs for the other actors it may call) will be stored in a Kubernetes ``ConfigMap`` and mounted into the container.
+The worker will then be started by running ``dramatiq`` within that virtualenv, on the mounted cutout code, with the stack activated.
+
+This completely avoids building new containers based on the stack container, at the cost of somewhat slow startup and extra traffic to PyPI on each container restart.
+
+If this implementation proves successful, we will look at ways to optimize it, such as including ``dramatiq[redis]`` in the stack or building a derived container with Dramatiq already installed.
+
 Interface contract
 ------------------
+
+This is the interface contract with the pipelines that will perform cutouts.
+This is sufficient for the initial implementation, which only supports a single cutout stencil on a single ``ID`` parameter.
+We expect to add multiple ``ID`` parameters and possibly multiple cutout stencils in future revisions of the service.
 
 Also see `DM-32097`_.
 
@@ -173,59 +275,67 @@ Also see `DM-32097`_.
 Input
 ~~~~~
 
-- One or more data IDs, as strings, that uniquely identify the source image or images on which to perform the cutout.
+- An ``ID``, as a string, that uniquely identifies the source image on which to perform the cutout.
   These are opaque to the image cutout service but must match the data IDs returned by ObsTAP queries, SIA, etc.
   The requirements for the image cutout service specify that the data ID may refer to a raw, PVI, compressed-PVI, diffim, or coadded image.
+  Alternately (and probably preferably), a function that transforms such an ``ID`` string into an appropriate Butler data query.
+  (This may be different for different pipelines.)
 
-- One or more cutout stencils. There are three possible stencil types:
-  - Circle, specified as an astropy SkyCoord in ICRS for the center and an astropy Angle for the radius.
-  - Polygon, specified as an astropy SkyCoord containing a sequence of vertices in ICRS.
+- A cutout stencils. There are three possible stencil types:
+  - Circle, specified as an Astropy SkyCoord in ICRS for the center and an Astropy Angle for the radius.
+  - Polygon, specified as an Astropy SkyCoord containing a sequence of at least three vertices in ICRS.
     The line from the last vertex to the first vertex is implicit.
     Vertices must be ordered such that the polygon winding direction is counter-clockwise (when viewed from the origin toward the sky), but the frontend doesn't know how to check this so the backend may need to.
   - Range, specified as a pair of minimum and maximum ra values and a pair of minimum and maximum dec values, in ICRS, as doubles.
     The minimums may be ``-Inf`` and/or the maximums may be ``+Inf`` to indicate an unbounded range extending to the boundaries of the image.
 
-The semantics of multiple data IDs and multiple stencils are combinatoric: in other words, the requested output is one cutout for each combination of data ID and stencil
-So two data IDs and a set of stencils consisting of two circles and one polygon would produce six cutouts: two circles and one polygon on both of the two data IDs.
+- The Butler collection in which to store the output.
+
+We assume the input should be provided as a Butler data query and as a table in an input Butler collection.
+The pipeline should specify the format of that input Butler collection and the Butler type or types to use.
+As with the ``ID`` transformation, this may be different for different pipelines.
 
 Polygon is optional in our formal requirements, but range stencils cannot be advertised with an IVOA capability unless we implement polygons, so it would be good if we could do so.
-
-We expect, in the future, to allow the client to also specify the output image format and thus request a JPEG image (or whatever else makes sense).
-But for the initial implementation we need only support FITS output.
-
-Output
-~~~~~~
-
-Output should be in FITS format.
-
-In the final implementation, the FITS file should contain metadata recording the input parameters and time at which the cutout was performed, for provenance purposes.
-This isn't required in the initial implementation.
-
-There is some controversy currently over whether to return a single FITS file with HDUs for each cutout, or to return N separate FITS files.
-The current SODA standard requires the latter, but we had thought the former would be easier to work with.
-We're still working that out; until we have a decision, whichever is easiest is fine (but be aware that it might change).
-
-The SODA service needs to return a URL to the output.
-In the longer term when we have client/server Butler, the intent is for the cutout backend to return the location of the cutout in a Butler collection and then the frontend will ask the Butler server for a signed URL to that image.
-In the interim, until we have client/server Butler, the easiest approach is probably to store the cutout in a GCS bucket, under a random name, using Butler, and then the frontend can ask Butler for the URL to the underlying file.
-
-Therefore, the output should be stored in a Butler collection backed by a GCS bucket.
-SQuaRE can do the GCS setup if there isn't something already available.
-
-A cutout area that's not fully contained within the specified image is an error (except for unbounded ranges).
-The current IVOA standard requires that all other cutouts still be done even if some of them are errors for this reason.
-I think this is less useful than failing the entire operation if there are any errors, but this is still being discussed.
-For the initial implementation, it may be easier to error out if any stencil is inconsistent with any image, but be aware that this could change.
-
-Errors can be delivered in whatever form is easiest as long as the frontend can recover the details of the error.
-(For example, an exception is fine as long as the user-helpful details of the error are in the exception.)
-
-Other notes
-~~~~~~~~~~~
 
 The long-term goal is to have some number of image cutout backends that are busily performing cutouts as fast as they can, since we expect this to be a popular service with a high traffic volume.
 Therefore, as much as possible, we want to do setup work in advance so that each cutout will be faster.
 For example, we want cutouts to be done in a long-running process that pays the cost of importing a bunch of Python libraries just once during startup, not for each cutout.
+
+Output
+~~~~~~
+
+The output cutout should be a FITS image stored in the output Butler collection.
+
+The FITS file should contain metadata recording the input parameters, time at which the cutout was performed, and any other desirable provenance information.
+(This can be postponed to a later revision of the pipeline.)
+
+
+Errors
+~~~~~~
+
+A cutout area that's not fully contained within the specified image is an error (except for unbounded ranges).
+The current SODA standard requires that this error be handled by returning success to the async job but setting the result to a ``text/plain`` document starting with an error code.
+This seems highly unexpected and undesirable, so we will not be following that approach.
+Instead, the operation should abort with an error if the cutout area is not fully contained in the specified image.
+
+Errors can be delivered in whatever form is easiest as long as the frontend can recover the details of the error.
+(For example, an exception is fine as long as the user-helpful details of the error are in the exception.)
+
+.. _cutout-future:
+
+Future work
+~~~~~~~~~~~
+
+We expect to add support for specifying the output image format and thus request a JPEG image (or whatever else makes sense).
+This presumably would map to a different pipeline.
+
+In the future, we will probably support multiple ``ID`` parameters and possibly multiple stencils.
+When supported, the semantics of multiple ``ID`` values and multiple stencils are combinatorial: in other words, the requested output is one cutout for each combination of ``ID`` and stencil.
+So two ``ID`` values and a set of stencils consisting of two circles and one polygon would produce six cutouts: two circles and one polygon on both of the two ``ID`` values.
+
+For cutouts with multiple ``ID`` parameters or multiple stencils, there is some controversy currently over whether to return a single FITS file with HDUs for each cutout, or to return N separate FITS files.
+The current SODA standard requires the latter, but we had thought the former would be easier to work with.
+Because of this and the error handling problem discussed above, we may deviate from the SODA image cutout standard and define our own SODA operations that returns a single FITS file with improved error handling.
 
 .. _results:
 
@@ -237,27 +347,24 @@ Result format
 
 All cutout requests will create a FITS file.
 A cutout request may also create additional output files if alternate image types are requested.
-As a future enhancement, all cutout requests will also create a VOTable with provenance information.
 
-The primary output of a cutout operation in the initial implementation will be a single FITS file.
-Each stencil parameter produces a separate cutout image.
-The cutout images will be stored as extensions in the result FITS file, not in the Basic FITS HDU.
+The job representation for a successful async request in the initial implementation will be a single FITS file.
+The cutout image will be stored as an extension in the FITS file, not in the Basic FITS HDU.
 This output should use a ``Content-Type`` of ``application/fits`` [#]_.
 
 .. [#] ``image/fits`` is not appropriate since no image is returned in the primary HDU.
 
-The result of a sync request that does not request an alternate image format is the FITS file.
 Therefore the sync API will redirect to the FITS file result of the underlying async job.
 
-The job representation for a successful async request will list the FITS file as the only result in the initial implementation.
-As a future enhancement, it will also list the VOTable with provenance information as a secondary output.
+As discussed in :ref:`cutout-future`, there is some controversy over the output format when multiple ``ID`` parameters or stencils are provided.
+The initial implementation will not support this.
 
 When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
 Signed URLs are temporary and may have a lifetime shorter than the output Butler collection, so the image cutout service will ask the client/server Butler for new signed URL each time the job results are requested (possibly with caching of up to an hour).
 The URL of the job result may therefore change, although the underlying objects will stay the same, and the client should not save the URL for much later use.
 
 Until client/server Butler is available, the URL of the FITS file will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
-The same will be done for the VOTable and for alternate image output formats.
+The same will be done for alternate image output formats.
 
 The SQL database that holds metadata about async jobs will hold the information required to request or reconstruct the URL of the FITS file.
 That information will be retrieved from there by the API service and used to construct the UWS job status response.
@@ -269,11 +376,13 @@ The current plan is to have ButlerURI automatically set the ``Content-Type`` bas
 Alternate image types
 ~~~~~~~~~~~~~~~~~~~~~
 
+This section describes future work that will not be part of the initial implementation.
+
 If another image type is requested, it will be returned alongside (not replacing) the FITS image.
 If another image type is requested and multiple cutouts are requested via multiple stencil parameters, each converted cutout will be a separate entry in the result list for the job.
-The converted images will be stored in the output Butler collection alongside the FITS image and the provenance information.
+The converted images will be stored in the output Butler collection alongside the FITS image.
 
-If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file, and then the Butler collection that contains all of the outputs.
+If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file.
 As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
 
 The response to a sync request specifying an alternate image type will be a redirect to an object store link for the converted image of that type.
@@ -288,7 +397,9 @@ This will be enforced by the service frontend.
 Result storage
 --------------
 
-The output Butler collections will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) and will be retained for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
+The output Butler collection will be retained only for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
+It will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) once ACLs for Butler collections are available through client/server Butler.
+
 If the user who requested a cutout wishes to retain it, they should store the outputs in local storage, their home directory in the Rubin Science Platform, a personal Butler collection, or some other suitable location.
 
 The `SODA`_ specification also allows a request to specify a VOSpace location in which to store the results, but does not specify a protocol for making that request.
@@ -320,12 +431,16 @@ The intent of the task system is for the invoker of the task to ask for the resu
 The internal result storage is also intended for small amounts of serializable data, not for full image cutouts.
 The natural data store for image cutouts is a Butler collection.
 
-Therefore, each worker task will take responsibility for storing its own metadata, as well as the cutout results, in external storage.
-The task metadata (success or failure, any error message, the request parameters, and the other metadata for a job required by the UWS specification) will be stored in a SQL database independent of the task queue system.
+Therefore, each worker task will take responsibility for storing the cutout results in external storage using the Butler.
+We will use the system described in :ref:`worker-queue` to route the pointer to that external storage to an actor that will update the UWS database with appropriate results.
+
+The task metadata (success or failure, any error message, the request parameters, and the other metadata for a job required by the UWS specification) will be stored in a SQL database external to the task queue system.
+The parameters known before job execution (such as the request parameters) will be stored by the frontend.
+The other data will be stored by specialized Dramatiq actors via callbacks triggered by the success or failure of the cutout actor.
 The image cutout web service will then use the SQL database to retrieve information about finished jobs, and ask the task queuing system for information about still-running jobs that have not yet stored their result metadata.
 This will satisfy the UWS API requirements.
 
-This means we will not need the result storage functionality of the task queuing system.
+We will use Dramatiq result storage, but only to pass the name of the output Butler collection from the cutout actor to the actor that will store that in the database.
 
 Summary of task queuing system survey
 -------------------------------------
@@ -388,16 +503,11 @@ If it does, we can consider other options, such as the ``asgiref.sync_to_async``
 Aborting jobs
 -------------
 
-Neither Celery nor Dramatiq support cancellation of a task once it begins executing.
-(See `Bogdanp/dramatiq#37 <https://github.com/Bogdanp/dramatiq/issues/37>`__ for some discussion and a way to implement task cancellation as a customization to Dramatiq.)
-
-It's not clear whether this feature will be necessary.
-It would be useful if a user accidentally started a resource-intensive request and then realized there was an error in the request and the results would be useless.
-However, it's not yet clear whether that case will be common enough to warrant the implementation complexity.
-
-Therefore, the initial implementation will not support aborting a UWS job if that job has already started.
-Posting ``PHASE=ABORT`` to the job phase URI will therefore return a 303 redirect to the job URI but will not change the phase.
+In the initial implementation, we won't support aborting jobs.
+Posting ``PHASE=ABORT`` to the job phase URL will therefore return a 303 redirect to the job URL but will not change the phase.
 (The UWS spec appears to require this behavior.)
+
+In a later version of the service, we will use `dramatiq-abort <https://flared.github.io/dramatiq-abort/>`__ to implement this feature.
 
 Discovery
 =========
@@ -422,7 +532,7 @@ Open questions
 
 #. Should we support an extension to SODA that allows the stencil parameters to be provided as a VOTable?
 
-#. SODA requires each cutout parameter return a separate result in the async API, and also requires that each cutout parameter that is invalid given the data ID return, as a result, a ``text/plain`` document that starts with an error label.
+#. SODA requires each cutout parameter return a separate result in the async API, and also requires that each cutout parameter that is invalid given the ``ID`` return, as a result, a ``text/plain`` document that starts with an error label.
    This doesn't seem like what we want.
    We would rather return a single FITS file with all cutouts included, and if any of the cutout parameters are invalid given the data ID, fail the entire job with an error, rather than making the client intuit an error from the MIME type of the result.
    Should we break the standard here?

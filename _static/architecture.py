@@ -32,7 +32,7 @@ with Diagram(
 ):
     user = User("End user")
 
-    metadata = SQL("Task SQL database")
+    metadata = SQL("UWS database")
     butler = Datastore("Butler repository")
     datastore = Datastore("Object store")
 
@@ -42,13 +42,14 @@ with Diagram(
 
         with Cluster("Cutout service"):
             api = KubernetesEngine("API service")
-            workers = KubernetesEngine("Workers (multiple)")
+            cutout_workers = KubernetesEngine("Workers (stack)")
+            uws_workers = KubernetesEngine("Workers (database)")
             redis = PersistentDisk("Redis")
 
     user >> ingress >> api >> Edge(label="Dramatiq") >> redis
+    api - metadata << uws_workers
     ingress >> Edge(label="Auth request") >> gafaelfawr
-    redis >> Edge(label="Dramatiq") >> workers >> metadata >> api
-    workers >> butler >> api
+    redis - Edge(label="Dramatiq") - cutout_workers >> butler >> api
+    redis >> uws_workers
     butler >> datastore
-    user << butler
-    user - datastore
+    user << datastore
