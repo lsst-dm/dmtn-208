@@ -282,10 +282,13 @@ Input
   (This may be different for different pipelines.)
 
 - A cutout stencils. There are three possible stencil types:
+
   - Circle, specified as an Astropy SkyCoord in ICRS for the center and an Astropy Angle for the radius.
+
   - Polygon, specified as an Astropy SkyCoord containing a sequence of at least three vertices in ICRS.
     The line from the last vertex to the first vertex is implicit.
     Vertices must be ordered such that the polygon winding direction is counter-clockwise (when viewed from the origin toward the sky), but the frontend doesn't know how to check this so the backend may need to.
+
   - Range, specified as a pair of minimum and maximum ra values and a pair of minimum and maximum dec values, in ICRS, as doubles.
     The minimums may be ``-Inf`` and/or the maximums may be ``+Inf`` to indicate an unbounded range extending to the boundaries of the image.
 
