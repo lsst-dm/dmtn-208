@@ -281,7 +281,8 @@ Input
   Alternately (and probably preferably), a function that transforms such an ``ID`` string into an appropriate Butler data query.
   (This may be different for different pipelines.)
 
-- A cutout stencils. There are three possible stencil types:
+- A single cutout stencil.
+  There are three possible stencil types:
 
   - Circle, specified as an Astropy SkyCoord in ICRS for the center and an Astropy Angle for the radius.
 
