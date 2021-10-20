@@ -276,8 +276,8 @@ Input
 ~~~~~
 
 - An ``ID``, as a string, that uniquely identifies the source image on which to perform the cutout.
-  These are opaque to the image cutout service but must match the data IDs returned by ObsTAP queries, SIA, etc.
-  The requirements for the image cutout service specify that the data ID may refer to a raw, PVI, compressed-PVI, diffim, or coadded image.
+  These are opaque to the image cutout service but must match the IDs returned by ObsTAP queries, SIA, etc.
+  The requirements for the image cutout service specify that ``ID`` may refer to a raw, PVI, compressed-PVI, diffim, or coadded image.
   Alternately (and probably preferably), a function that transforms such an ``ID`` string into an appropriate Butler data query.
   (This may be different for different pipelines.)
 
@@ -537,5 +537,5 @@ Open questions
 
 #. SODA requires each cutout parameter return a separate result in the async API, and also requires that each cutout parameter that is invalid given the ``ID`` return, as a result, a ``text/plain`` document that starts with an error label.
    This doesn't seem like what we want.
-   We would rather return a single FITS file with all cutouts included, and if any of the cutout parameters are invalid given the data ID, fail the entire job with an error, rather than making the client intuit an error from the MIME type of the result.
+   We would rather return a single FITS file with all cutouts included, and if any of the cutout parameters are invalid given the ``ID``, fail the entire job with an error, rather than making the client intuit an error from the MIME type of the result.
    Should we break the standard here?
