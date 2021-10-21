@@ -213,8 +213,8 @@ A slightly more complex queuing structure can address this problem.
 Instead of a single cutout function (an "actor" in the Dramatiq vocabulary), define four actors (names given in parentheses):
 
 #. The cutout actor itself, which takes a (JSON-serializable) list of arguments specifying the ``ID`` and cutout stencil [#]_.  (``cutout``)
-#. An actor that marks the UWS job as executing.  (``job_start``)
-#. An actor that marks the UWS job as complete and saves a pointer to the Butler output collection.  (``job_complete``)
+#. An actor that marks the UWS job as executing.  (``job_started``)
+#. An actor that marks the UWS job as complete and saves a pointer to the Butler output collection.  (``job_completed``)
 #. An actor that marks the UWS job as failed and saves the error message in the UWS database.  (``job_failed``)
 
 .. [#] This is a minor simplification.
