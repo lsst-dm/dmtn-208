@@ -107,6 +107,9 @@ The `UWS`_ specification supports providing a quote for how long an async query 
 The initial implementation will always set the quote to ``xsi:nil``, indicating that it does not know how long the request will take.
 However, hopefully a future improvement of the service will provide real quote values based on an estimate of the complexity of the cutout request, since this information would be useful for users deciding whether to make a complex cutout request.
 
+The initial implementation will not support changing the job parameters after the creation of an async job but before the job is started.
+This may be added in a future version if it seems desirable.
+
 API modes
 ---------
 
