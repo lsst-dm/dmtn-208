@@ -80,6 +80,8 @@ API service
 
 The service frontend providing the SODA API will use the `FastAPI`_ framework.
 
+The initial implementation won't implement DALI-examples, but this will be added in a later version.
+
 Input parameters
 ----------------
 
