@@ -14,6 +14,10 @@ This document discusses implementation considerations and proposes an implementa
 .. _Dramatiq: https://dramatiq.io/
 .. _pipeline task: https://pipelines.lsst.io/
 
+See `SQR-063`_ for additional discussion of difficulties with implementing the relevant IVOA standards.
+
+.. _SQR-063: https://sqr-063.lsst.io/
+
 Implementation goals
 ====================
 
@@ -92,12 +96,20 @@ The image cutout service requirements in `LDM-554`_ state that support for ``POL
 The API will support them if the underlying pipeline task supports them.
 (Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS=POLYGON``.)
 
-The initial version of the cutout service will only support a single ``ID`` parameter and a single stencil parameter.
-It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting do not match our needs.
-
 ``TIME`` and ``POL`` stencil parameters will not be supported.
 ``BAND`` stencil parameters will not be supported in the initial implementation.
 They may become meaningful later in cutout requests from all-sky coadds and can be added at that time.
+
+The initial version of the cutout service will only support a single ``ID`` parameter and a single stencil parameter.
+It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting do not match our needs.
+
+The ``ID`` parameter must be a UUID assigned by the Butler and uniquely identifying a source image.
+The initial implementation will therefore only support cutouts from images that exist in a source Butler collection and thus have a UUID.
+
+Virtual data products will not have a UUID because they will not already exist in a Butler collection, and therefore this ``ID`` scheme cannot be used to identify them.
+The most natural way to identify a virtual data product is probably via the Butler data ID tuple.
+When cutouts for virtual data products are later implemented, we expect those data products to be identified via a parameter (or set of parameters) other than ``ID``, via an extension to the SODA protocol.
+Those parameters would convey the Butler data ID tuple, and the ``ID`` parameter would not be used for such cutouts.
 
 The initial implementation of the image cutout service will only return FITS files.
 However, we expect to need support for other image types such as JPEG in the future.
@@ -181,7 +193,7 @@ Mapping cutout requests to pipelines
 ------------------------------------
 
 We expect cutout requests to map to different pipelines depending on the details of the request.
-For example, the ``ID`` may specify a virtual data product, which may require a pipelines to construct that virtual data product before performing a cutout.
+For example, once cutouts for virtual data products are implemented, they may require a pipeline that constructs the virtual data product before performing a cutout.
 We may also want to implement each cutout stencil type as a separate pipeline.
 
 Each possible pipeline will have its own registered Dramatiq actor.
@@ -190,7 +202,7 @@ Because Dramatiq is used to execute the actor, all arguments must be JSON-serial
 The actor will then store the input parameters into an input Butler collection for the pipeline, if necessary.
 
 The logic to map an incoming SODA request to a pipeline (and thus its actor) and input parameters will be done in the API frontend as the request is received so that any errors can be immediately reported to the user.
-This mapping may require retrieving metadata about the dataset specified by the ``ID`` parameter from another service (probably the Butler).
+This will include resolving the UUID provided in the ``ID`` parameter to a specific Butler ``DatasetRef``.
 
 .. _worker-queue:
 
@@ -249,6 +261,11 @@ Similarly, the ``cutout`` actor only needs to contain the code for performing th
 
 The Dramatiq result store will be used to pass a pointer to Butler output collection from the ``cutout`` actor to the ``job_complete`` actor, and any exceptions from the ``cutout`` actor to the ``job_failed`` actor.
 
+Note that this queuing design means that the database updates may be done out of order.
+For example, the job may be marked completed and its completion time and results stored, and then slightly later its start time may be recorded.
+This may under some circumstances be visible to a user querying the job metadata.
+We don't expect this to cause significant issues.
+
 Worker containers
 -----------------
 
@@ -259,7 +276,7 @@ Given this worker queue design, the worker container can be a generic stack cont
    This is expected to be a single (short) file that performs any necessary setup for the pipeline task.
 
 For the initial implementation, we will create a new virtualenv in a Kubernetes ``emptyDir`` temporary file system on container startup, using the stack Python, and ``pip install dramatiq[redis]`` in that virtualenv.
-The code for the cutout actor (and the stubs for the other actors it may call) will be stored in a Kubernetes ``ConfigMap`` and mounted into the container.
+The code for the cutout actor (and the stubs for the other actors it may call) will be retrieved from GitHub and stored in the container.
 The worker will then be started by running ``dramatiq`` within that virtualenv, on the mounted cutout code, with the stack activated.
 
 This completely avoids building new containers based on the stack container, at the cost of somewhat slow startup and extra traffic to PyPI on each container restart.
@@ -280,11 +297,9 @@ Also see `DM-32097`_.
 Input
 ~~~~~
 
-- An ``ID``, as a string, that uniquely identifies the source image on which to perform the cutout.
-  These are opaque to the image cutout service but must match the IDs returned by ObsTAP queries, SIA, etc.
-  The requirements for the image cutout service specify that ``ID`` may refer to a raw, PVI, compressed-PVI, diffim, or coadded image.
-  Alternately (and probably preferably), a function that transforms such an ``ID`` string into an appropriate Butler data query.
-  (This may be different for different pipelines.)
+- An ``ID``, as a string, which is a UUID for a ``DatasetRef`` of a source image stored in the Butler.
+  This must match the ID returned by ObsTAP queries, SIA, etc.
+  The requirements for the image cutout service specify that ``ID`` may refer to a raw, PVI, compressed-PVI, diffim, or coadded image, but for this initial implementation virtual data products are not supported.
 
 - A single cutout stencil.
   There are three possible stencil types:
@@ -302,7 +317,7 @@ Input
 
 We assume the input should be provided as a Butler data query and as a table in an input Butler collection.
 The pipeline should specify the format of that input Butler collection and the Butler type or types to use.
-As with the ``ID`` transformation, this may be different for different pipelines.
+This may be different for different pipelines.
 
 Polygon is optional in our formal requirements, but range stencils cannot be advertised with an IVOA capability unless we implement polygons, so it would be good if we could do so.
 
@@ -345,6 +360,10 @@ So two ``ID`` values and a set of stencils consisting of two circles and one pol
 For cutouts with multiple ``ID`` parameters or multiple stencils, there is some controversy currently over whether to return a single FITS file with HDUs for each cutout, or to return N separate FITS files.
 The current SODA standard requires the latter, but we had thought the former would be easier to work with.
 Because of this and the error handling problem discussed above, we may deviate from the SODA image cutout standard and define our own SODA operations that returns a single FITS file with improved error handling.
+
+We will eventually need to support cutouts from virtual data products, which will not have UUIDs because they won't already be stored in the Butler.
+A natural way of specifying such data products is the Butler data ID tuple.
+When we add support for such cutouts, we expect to use a different input parameter or parameters to specify them, as an extension to the SODA protocol, rather than using ``ID``.
 
 .. _results:
 
@@ -433,7 +452,7 @@ Task result storage
 An image cutout task produces two types of output: the cutouts themselves with their associated astronomical metadata, and the metadata about the request.
 The latter includes the parameters of the cutout request, the job status, and any error messages.
 
-The task queuing system is the natural store for the task metadata.
+The task queuing system would appear to be the natural store for the task metadata.
 However, even with a configured result store, the task queuing system only stores task metadata while the task is running and for a short time afterwards.
 The intent of the task system is for the invoker of the task to ask for the results, at which point they are delivered and then discarded.
 
@@ -450,6 +469,19 @@ The image cutout web service will then use the SQL database to retrieve informat
 This will satisfy the UWS API requirements.
 
 We will use Dramatiq result storage, but only to pass the name of the output Butler collection from the cutout actor to the actor that will store that in the database.
+
+Waiting for job completion
+--------------------------
+
+Ideally, we should be able to use the task queuing system to know when a job completes and thus to implement the sync API and the UWS requirement for long-polling.
+Unfortunately, this is complex to do given the queuing strategy used to separate the cutout worker from the database work.
+A job is not complete from the user's perspective until the results are stored, but the result storage is done by a separate queued task after the cutout task has completed.
+Waiting for the cutout task completion is therefore not sufficient to know that the entire job has completed from the user's perspective.
+
+In addition, UWS requires the server responding to a long-poll request to distinguish between the ``QUEUED`` and ``EXECUTING`` job states, but the move from ``QUEUED`` to ``EXECUTING`` does not trigger message bus activity for the cutout task (it's handled by a separate subtask).
+
+For the initial implementation, we will therefore support the sync API and long polling by polling the database for job status with exponential back-off.
+It should be possible to do better than this using the message bus underlying the task queuing system, but a message bus approach will be more complex, so we will hold off on implementation until we know whether the complexity is warranted.
 
 Summary of task queuing system survey
 -------------------------------------
@@ -500,8 +532,7 @@ However, we are already using Redis as a component of the Rubin Science Platform
 .. _RabbitMQ: https://www.rabbitmq.com/
 
 Dramatiq supports either Redis or Memcache as a store for task results.
-However, since we need an external database to store task metadata anyway, we don't need to store task results within the task queue system.
-(See :ref:`task-storage` for more details.)
+We only need very temporary task result storage to handle storing job results in the database, and are already using Redis for the message bus, so we will use Redis for task result storage as well.
 
 Neither Celery nor Dramatiq support asyncio natively.
 Dramatiq is unlikely to add support since the maintainer `is not a fan of asyncio <https://github.com/Bogdanp/dramatiq/issues/238>`__.
@@ -532,16 +563,3 @@ This follows the pattern described in section 4.1 of the `SODA`_ specification.
 In the longer term, we may instead run a DataLink service and reference it in the ``access_url`` column of ObsTAP queries or via a DataLink "service descriptor" following section 4.2 of the `SODA`_ specification.
 
 .. _DataLink: https://www.ivoa.net/documents/DataLink/20150617/REC-DataLink-1.0-20150617.html
-
-Open questions
-==============
-
-#. We need to agree on an identifier format for Rubin Observatory data products.
-   This will be used for the ``ID`` parameter.
-
-#. Should we support an extension to SODA that allows the stencil parameters to be provided as a VOTable?
-
-#. SODA requires each cutout parameter return a separate result in the async API, and also requires that each cutout parameter that is invalid given the ``ID`` return, as a result, a ``text/plain`` document that starts with an error label.
-   This doesn't seem like what we want.
-   We would rather return a single FITS file with all cutouts included, and if any of the cutout parameters are invalid given the ``ID``, fail the entire job with an error, rather than making the client intuit an error from the MIME type of the result.
-   Should we break the standard here?
