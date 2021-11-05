@@ -217,9 +217,13 @@ Ideally, we would avoid creating a new derivative container entirely.
 Once a job has been created via the frontend and queued, workers must perform the following actions:
 
 - Parse and store the input parameters in a format suitable for performing the cutout with a pipeline task.
+
 - Update the UWS job status to indicate execution is in progress.
+
 - Perform the cutout, storing the results in an output Butler collection.
+
 - Update the UWS job status to indicate execution is complete and store a pointer to the output Butler collection.
+
 - If the cutout job failed, instead update the UWS job to indicate the job errored, and store the error message in the UWS database.
 
 The simplest design would be to give the worker credentials for the UWS database and have it perform all of those actions directly, via a common UWS wrapper around an arbitrary worker process.
