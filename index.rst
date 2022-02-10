@@ -153,6 +153,9 @@ Administrative access to the API without impersonation may be added in future ve
 Access control is done via Gafaelfawr_.
 Image cutout service access is controlled via the ``read:image`` scope.
 
+The results of a cutout request will only be accessible by the user who requested the cutout.
+If that user wishes to share the results with others, they must download them and put them in some other data store that supports sharing.
+
 Quotas and throttling
 ---------------------
 
