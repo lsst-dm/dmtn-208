@@ -19,6 +19,10 @@ graph_attr = {
 }
 
 node_attr = {
+    "fontsize": "14.0",
+}
+
+edge_attr = {
     "fontsize": "10.0",
 }
 
@@ -32,13 +36,14 @@ with Diagram(
 ):
     user = User("End user")
 
-    metadata = SQL("UWS database")
     butler = Datastore("Butler repository")
-    datastore = Datastore("Object store")
+    images = Datastore("Image store")
+    datastore = Datastore("Cutout store")
 
     with Cluster("Kubernetes"):
         ingress = LoadBalancing("NGINX ingress")
         gafaelfawr = KubernetesEngine("Gafaelfawr")
+        metadata = SQL("UWS database")
 
         with Cluster("Cutout service"):
             api = KubernetesEngine("API service")
@@ -46,10 +51,11 @@ with Diagram(
             uws_workers = KubernetesEngine("Workers (database)")
             redis = PersistentDisk("Redis")
 
-    user >> ingress >> api >> Edge(label="Dramatiq") >> redis
+    user >> ingress >> api
+    api - Edge(label="Dramatiq") - redis
     api - metadata << uws_workers
-    ingress >> Edge(label="Auth request") >> gafaelfawr
-    redis - Edge(label="Dramatiq") - cutout_workers >> butler >> api
-    redis >> uws_workers
-    butler >> datastore
+    ingress >> gafaelfawr
+    redis - Edge(label="Dramatiq") - cutout_workers >> datastore >> api
+    cutout_workers >> butler >> images
+    redis - Edge(label="Dramatiq") - uws_workers
     user << datastore
