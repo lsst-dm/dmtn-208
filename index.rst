@@ -6,13 +6,12 @@ Abstract
 ========
 
 The IVOA `SODA`_ (Server-side Operations for Data Access) standard will be used to implement an image cutout service for the Rubin Science Platform following the requirements in `LDM-554`_ 4.2.3 and the architecture specified in `DMTN-139`_ (not yet published).
-This document discusses implementation considerations and proposes an implementation strategy that uses `Dramatiq`_ as a work-queuing system, a `pipeline task`_ to perform the cutout, and Butler as the data store.
+This document discusses implementation considerations and describes the chosen implementation strategy, which uses `Dramatiq`_ as a work-queuing system and a separate dedicated GCS bucket as a result store.
 
 .. _SODA: https://ivoa.net/documents/SODA/20170517/REC-SODA-1.0.html
 .. _LDM-554: https://ldm-554.lsst.io/
 .. _DMTN-139: https://dmtn-139.lsst.io/
 .. _Dramatiq: https://dramatiq.io/
-.. _pipeline task: https://pipelines.lsst.io/
 
 See `SQR-063`_ for additional discussion of difficulties with implementing the relevant IVOA standards.
 
@@ -27,7 +26,7 @@ This design satisfies the following high-level goals:
    This will satisfy the desired feature from `DMTN-139`_ that each web service publish an OpenAPI v3 service description, since FastAPI does that automatically.
 
 #. There must be a clear division of responsibility between the service framework, which implements the IVOA API, and the data manipulation that produces the cutout.
-   This is so that data manipulation is applied consistently in both Rubin data processing and VO services, and so that the service takes advantage of code validated as part of the science pipeline QA process. 
+   This ensures that data manipulation is applied consistently in both Rubin data processing and VO services, and that the service takes advantage of code validated as part of the science pipeline QA process.
 
 #. The worker processes that perform the data manipulation must be long-running so that the startup costs of loading relevant Python libraries and initializing external resources do not impact the performance of image cutout requests.
 
@@ -40,8 +39,6 @@ This design satisfies the following high-level goals:
 #. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
    The implementation will also serve as a model from which we will derive a template for future IVOA API services.
 
-#. The Butler should be used as the underlying data store for all Rubin Observatory data objects.
-
 #. Cutouts should be retrieved directly from the underlying data store that holds them, rather than retrieved and then re-sent by an intermediate web server.
    This avoids performance issues with the unnecessary middle hop and avoids having to implement such things as streaming or chunking in an intermediate server.
 
@@ -53,24 +50,30 @@ Architecture summary
 
 The image cutout service will be a `FastAPI`_ Python service running as a Kubernetes ``Deployment`` inside the Rubin Science Platform and, as with every other RSP service, using `Gafaelfawr`_ for authentication and authorization.
 Image cutout requests will be dispatched via `Dramatiq`_ to worker processes created via a separate Kubernetes ``Deployment`` in the same cluster.
-A high-availability `Redis`_ cluster will be used as the message bus and task result store for Dramatiq.
+`Redis`_ will be used as the message bus and temporary metadata result store for Dramatiq.
 
 .. _FastAPI: https://fastapi.tiangolo.com/
 .. _Gafaelfawr: https://gafaelfawr.lsst.io/
+.. _Redis: https://redis.io/
 
-Image cutouts will be stored in a temporary Butler collection.
-The results of the cutout request will be served from that collection.
+Image cutouts will be stored in a dedicated `GCS`_ bucket with an object expiration time set, so cutouts will be automatically purged after some period of time.
+The results of the cutout request will be served from that bucket.
+
+.. _GCS: https://cloud.google.com/storage
 
 The Dramatiq workers will be separated into two pools using different queues.
 One will perform the cutouts and will run on the stack container.
-The other, smaller pool will perform database housekeeping and store results or errors.
+The other, smaller pool will perform database housekeeping and store results or errors in the PostgreSQL database.
 
 The storage used by cutout results will be temporary and garbage-collected after some time.
-The expected lifetime is on the order of weeks.
+The retention time for the initial implementation is 30 days, but this can easily be changed.
 Users who wish to preserve the results for longer will need to transfer their data elsewhere, such as local storage, their home directory on the Rubin Science Platform, or a personal Butler collection.
 
-Metadata about requests will be stored by the cutout workers in a SQL database, using CloudSQL for installations on Google Cloud Platform and an in-cluster PostgreSQL server elsewhere.
+Metadata about requests will be stored by the cutout workers in a SQL database, using `Cloud SQL`_ for installations on Google Cloud Platform and an in-cluster `PostgreSQL`_ server elsewhere.
 The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
+
+.. _Cloud SQL: https://cloud.google.com/sql
+.. _PostgreSQL: https://www.postgresql.org/
 
 Here is the overall design in diagram form.
 
@@ -84,7 +87,8 @@ API service
 
 The service frontend providing the SODA API will use the `FastAPI`_ framework.
 
-The initial implementation won't implement DALI-examples, but this will be added in a later version.
+The initial implementation won't implement DALI-examples.
+This will be added in a later version.
 
 Input parameters
 ----------------
@@ -92,16 +96,15 @@ Input parameters
 SODA calls parameters that control the shape of the cutout "filtering parameters" or "filters."
 The word filter is overloaded in astronomy, so this document instead calls those parameters "stencils."
 
-The image cutout service requirements in `LDM-554`_ state that support for ``POLYGON`` requests is optional.
-The API will support them if the underlying pipeline task supports them.
-(Note that if ``POLYGON`` is not supported, we cannot advertise the ``POS`` capability, since that capability requires support for ``POS=POLYGON``.)
+The initial implementation will support ``CIRCLE`` and ``POLYGON``.
+``POS=RANGE`` and therefore ``POS`` support is more complex and will not be supported initially.
 
 ``TIME`` and ``POL`` stencil parameters will not be supported.
 ``BAND`` stencil parameters will not be supported in the initial implementation.
 They may become meaningful later in cutout requests from all-sky coadds and can be added at that time.
 
 The initial version of the cutout service will only support a single ``ID`` parameter and a single stencil parameter.
-It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting do not match our needs.
+It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting may not match our needs.
 
 The ``ID`` parameter must be a UUID assigned by the Butler and uniquely identifying a source image.
 The initial implementation will therefore only support cutouts from images that exist in a source Butler collection and thus have a UUID.
@@ -134,7 +137,7 @@ Once it has completed, the client can retrieve metadata about the job, including
 To avoid unnecessarily multiplying API implementations, the sync mode will be implemented as a wrapper around the async mode.
 Specifically, a sync request will start an async job, wait for that job to complete, and then redirect to the primary result URL for the async job.
 
-Further considerations for UWS support and async jobs are discussed in :ref:`uws-impl`.
+Further considerations for UWS support and async jobs are discussed in :ref:`UWS implementation <uws-impl>`.
 
 Permission model
 ----------------
@@ -149,6 +152,9 @@ Administrative access to the API without impersonation may be added in future ve
 
 Access control is done via Gafaelfawr_.
 Image cutout service access is controlled via the ``read:image`` scope.
+
+The results of a cutout request will only be accessible by the user who requested the cutout.
+If that user wishes to share the results with others, they must download them and put them in some other data store that supports sharing.
 
 Quotas and throttling
 ---------------------
@@ -174,35 +180,21 @@ All of these decisions will be made by the API service layer when the user attem
 Performing the cutout
 =====================
 
-To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a pipeline.
-This will allow multi-step cutout operations, such as cutouts from PVIs that must be reconstructed from raw images.
+To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a separate package that uses the Rubin Observatory stack.
+Eventually, this package may also need to run pipeline tasks to support multi-step cutout operations, such as cutouts from PVIs that must be reconstructed from raw images.
+This is not required (or implemented) in the initial implementation.
 
-The cutout pipeline is responsible for propagating provenance metadata from the source data and the cutout parameters into the resulting FITS file, or into appropriate metadata in the output files for other image types.
+The cutout backend is responsible for propagating provenance metadata from the source data and the cutout parameters into the resulting FITS file, or into appropriate metadata in the output files for other image types.
 See `PipelineTask-level provenance in DMTN-185 <https://dmtn-185.lsst.io/#pipelinetask-level-provenance>`__ for discussion of provenance metadata in general.
 
-Currently, pipelines must be invoked via the command line, but the expectation is that the project will add a way of invoking a pipeline via a Python API.
-Once that is available, each cutout worker can be a long-running Python process that works through a queue of cutout requests, dispatching each to a pre-built pipeline, without paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
+The cutout workers are long-running Python processes that work through queues of cutout requests, dispatching each to the code in the cutout backend.
+The same Butler instance and thus cached resources such as open database connections is used for the lifetime of the process.
+This avoids paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
-Once there is a client/server Butler service, Butler operations to perform the cutout and to store the cutout result will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049`_.
+Once there is a client/server Butler service, Butler operations to perform the cutout will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049`_.
+The mechanism to pass that delegated internal token from the API frontend to the cutout backend has not yet been designed.
 
 .. _SQR-049: https://sqr-049.lsst.io/#internal-tokens
-
-.. _task-mapping:
-
-Mapping cutout requests to pipelines
-------------------------------------
-
-We expect cutout requests to map to different pipelines depending on the details of the request.
-For example, once cutouts for virtual data products are implemented, they may require a pipeline that constructs the virtual data product before performing a cutout.
-We may also want to implement each cutout stencil type as a separate pipeline.
-
-Each possible pipeline will have its own registered Dramatiq actor.
-The input parameters to that pipeline will be the arguments to that actor.
-Because Dramatiq is used to execute the actor, all arguments must be JSON-serializable (so, for example, we will pass Python floats rather than Astropy SkyCoord objects).
-The actor will then store the input parameters into an input Butler collection for the pipeline, if necessary.
-
-The logic to map an incoming SODA request to a pipeline (and thus its actor) and input parameters will be done in the API frontend as the request is received so that any errors can be immediately reported to the user.
-This will include resolving the UUID provided in the ``ID`` parameter to a specific Butler ``DatasetRef``.
 
 .. _worker-queue:
 
@@ -210,37 +202,27 @@ Worker queue design
 -------------------
 
 The worker processes run in a container built on top of the Rubin Observatory stack.
-Unfortunately, stack containers are so large that they cannot be constructed in GitHub Actions.
-This makes building new containers annoyingly difficult, so we want to minimize how frequently it needs to be done.
-Ideally, we would avoid creating a new derivative container entirely.
 
 Once a job has been created via the frontend and queued, workers must perform the following actions:
 
 - Parse and store the input parameters in a format suitable for performing the cutout with a pipeline task.
-
 - Update the UWS job status to indicate execution is in progress.
-
-- Perform the cutout, storing the results in an output Butler collection.
-
-- Update the UWS job status to indicate execution is complete and store a pointer to the output Butler collection.
-
+- Perform the cutout, storing the results in the output GCS bucket.
+- Update the UWS job status to indicate execution is complete and store a pointer to the file in the output GCS bucket.
 - If the cutout job failed, instead update the UWS job to indicate the job errored, and store the error message in the UWS database.
 
 The simplest design would be to give the worker credentials for the UWS database and have it perform all of those actions directly, via a common UWS wrapper around an arbitrary worker process.
-However, the cutout work has to run in the stack, but the wrapper would need access to the database schema, the input parameter parser, and all of the resulting dependencies.
+However, the cutout work has to run on top of the stack, but the wrapper would need access to the database schema, the input parameter parser, and all of the resulting dependencies.
 This would require adding a significant amount of code on top of the stack container, which is not desirable for the reasons mentioned above.
+It may also uncover version conflicts between the Python libraries that are part of the stack and the Python libraries used by the other components of the cutout service.
 
 A slightly more complex queuing structure can address this problem.
 Instead of a single cutout function (an "actor" in the Dramatiq vocabulary), define four actors (names given in parentheses):
 
-#. The cutout actor itself, which takes a (JSON-serializable) list of arguments specifying the ``ID`` and cutout stencil [#]_.  (``cutout``)
+#. The cutout actor itself, which takes a (JSON-serializable) list of arguments specifying the ``ID`` and cutout stencil.  (``cutout``)
 #. An actor that marks the UWS job as executing.  (``job_started``)
 #. An actor that marks the UWS job as complete and saves a pointer to the Butler output collection.  (``job_completed``)
 #. An actor that marks the UWS job as failed and saves the error message in the UWS database.  (``job_failed``)
-
-.. [#] This is a minor simplification.
-       There will likely be multiple cutout actors since there will be a one-to-one correspondence between cutout actors and pipeline tasks.
-       The frontend will decide which actor to execute given the input parameters, as discussed in :ref:`task-mapping`.
 
 The first actor will use the ``cutout`` queue.
 The other three actors will use the ``uws`` queue.
@@ -263,7 +245,7 @@ The other, smaller pool of workers will only watch the ``uws`` queue and do data
 With this separation, the frontend and ``uws`` queue workers can share code, including the database schema, but only need a stub for the ``cutout`` actor.
 Similarly, the ``cutout`` actor only needs to contain the code for performing the cutout, and can contain only stubs for the ``job_start``, ``job_complete``, and ``job_failed`` actors.
 
-The Dramatiq result store will be used to pass a pointer to Butler output collection from the ``cutout`` actor to the ``job_complete`` actor, and any exceptions from the ``cutout`` actor to the ``job_failed`` actor.
+The Dramatiq result store will be used to pass the metadata for the cutout result from the ``cutout`` actor to the ``job_complete`` actor, and any exceptions from the ``cutout`` actor to the ``job_failed`` actor.
 
 Note that this queuing design means that the database updates may be done out of order.
 For example, the job may be marked completed and its completion time and results stored, and then slightly later its start time may be recorded.
@@ -273,19 +255,17 @@ We don't expect this to cause significant issues.
 Worker containers
 -----------------
 
-Given this worker queue design, the worker container can be a generic stack container plus the following:
+Given this worker queue design, the worker container can be a generic stack container [#]_ plus the following:
+
+.. [#] Currently, the backend code for performing the cutout is not part of a generic stack container.
+       However, the intent is to add it to ``lsst-distrib``.
+       See `RFC-828 <https://jira.lsstcorp.org/browse/RFC-828`__.
 
 #. The results of ``pip install dramatiq[redis]``, so that the worker can talk to the message queue and result store.
 #. The code for performing the cutout.
    This is expected to be a single (short) file that performs any necessary setup for the pipeline task.
 
-For the initial implementation, we will create a new virtualenv in a Kubernetes ``emptyDir`` temporary file system on container startup, using the stack Python, and ``pip install dramatiq[redis]`` in that virtualenv.
-The code for the cutout actor (and the stubs for the other actors it may call) will be retrieved from GitHub and stored in the container.
-The worker will then be started by running ``dramatiq`` within that virtualenv, on the mounted cutout code, with the stack activated.
-
-This completely avoids building new containers based on the stack container, at the cost of somewhat slow startup and extra traffic to PyPI on each container restart.
-
-If this implementation proves successful, we will look at ways to optimize it, such as including ``dramatiq[redis]`` in the stack or building a derived container with Dramatiq already installed.
+This container will be built alongside the container for the frontend and database workers.
 
 Interface contract
 ------------------
@@ -316,14 +296,9 @@ Input
 
   - Range, specified as a pair of minimum and maximum ra values and a pair of minimum and maximum dec values, in ICRS, as doubles.
     The minimums may be ``-Inf`` and/or the maximums may be ``+Inf`` to indicate an unbounded range extending to the boundaries of the image.
+    Range will not be supported in the initial implementation.
 
-- The Butler collection in which to store the output.
-
-We assume the input should be provided as a Butler data query and as a table in an input Butler collection.
-The pipeline should specify the format of that input Butler collection and the Butler type or types to use.
-This may be different for different pipelines.
-
-Polygon is optional in our formal requirements, but range stencils cannot be advertised with an IVOA capability unless we implement polygons, so it would be good if we could do so.
+- The GCS bucket into which to store the resulting cutout.
 
 The long-term goal is to have some number of image cutout backends that are busily performing cutouts as fast as they can, since we expect this to be a popular service with a high traffic volume.
 Therefore, as much as possible, we want to do setup work in advance so that each cutout will be faster.
@@ -332,11 +307,13 @@ For example, we want cutouts to be done in a long-running process that pays the 
 Output
 ~~~~~~
 
-The output cutout should be a FITS image stored in the output Butler collection.
+The output cutout should be a FITS image stored in the provided GCS bucket.
+In the initial implementation, the backend produces only a FITS image.
+Future versions may create other files, such as a metadata file for that image.
+The cutout backend will return the path of the newly-stored files.
 
 The FITS file should contain metadata recording the input parameters, time at which the cutout was performed, and any other desirable provenance information.
 (This can be postponed to a later revision of the pipeline.)
-
 
 Errors
 ~~~~~~
@@ -355,7 +332,6 @@ Future work
 ~~~~~~~~~~~
 
 We expect to add support for specifying the output image format and thus request a JPEG image (or whatever else makes sense).
-This presumably would map to a different pipeline.
 
 In the future, we will probably support multiple ``ID`` parameters and possibly multiple stencils.
 When supported, the semantics of multiple ``ID`` values and multiple stencils are combinatorial: in other words, the requested output is one cutout for each combination of ``ID`` and stencil.
@@ -369,6 +345,8 @@ We will eventually need to support cutouts from virtual data products, which wil
 A natural way of specifying such data products is the Butler data ID tuple.
 When we add support for such cutouts, we expect to use a different input parameter or parameters to specify them, as an extension to the SODA protocol, rather than using ``ID``.
 
+We may wish to support ``RANGE`` stencils in order to provide a more complete implementation of the SODA standard.
+
 .. _results:
 
 Results
@@ -379,6 +357,7 @@ Result format
 
 All cutout requests will create a FITS file.
 A cutout request may also create additional output files if alternate image types are requested.
+It may also create a separate metadata file.
 
 The job representation for a successful async request in the initial implementation will be a single FITS file.
 The cutout image will be stored as an extension in the FITS file, not in the Basic FITS HDU.
@@ -391,18 +370,15 @@ Therefore the sync API will redirect to the FITS file result of the underlying a
 As discussed in :ref:`cutout-future`, there is some controversy over the output format when multiple ``ID`` parameters or stencils are provided.
 The initial implementation will not support this.
 
-When client/server Butler is available, the FITS file will be provided via a redirect to a signed link for the location of the FITS file in the object store underlying the Butler collection.
-Signed URLs are temporary and may have a lifetime shorter than the output Butler collection, so the image cutout service will ask the client/server Butler for new signed URL each time the job results are requested (possibly with caching of up to an hour).
+The FITS file will be provided to the user via a signed link for the location of the FITS file in the cutout object store.
+Signed URLs are temporary and are expected to have a lifetime shorter than the cutout object store, so the image cutout service will generate new signed URLs each time the job results are requested (possibly with caching of up to an hour).
 The URL of the job result may therefore change, although the underlying objects will stay the same, and the client should not save the URL for much later use.
+The same will be done for alternate image output formats when those are supported.
 
-Until client/server Butler is available, the URL of the FITS file will be an unsigned redirect to the object store URL, and we will make the object store public (but with a random name).
-The same will be done for alternate image output formats.
-
-The SQL database that holds metadata about async jobs will hold the information required to request or reconstruct the URL of the FITS file.
+The SQL database that holds metadata about async jobs will hold the S3 URL to the objects in the cutout object store.
 That information will be retrieved from there by the API service and used to construct the UWS job status response.
 
 Because the image will be retrieved directly from the underlying object store, the ``Content-Type`` metadata for files downloaded directly by the user must be correct in the object store.
-Butler currently does not set ``Content-Type`` metadata when storing objects.
 The current plan is to have ButlerURI automatically set the ``Content-Type`` based on the file extension, and ensure that files stored in a output Butler collection have appropriate extensions.
 
 Alternate image types
@@ -412,10 +388,10 @@ This section describes future work that will not be part of the initial implemen
 
 If another image type is requested, it will be returned alongside (not replacing) the FITS image.
 If another image type is requested and multiple cutouts are requested via multiple stencil parameters, each converted cutout will be a separate entry in the result list for the job.
-The converted images will be stored in the output Butler collection alongside the FITS image.
+The converted images will be stored in the cutout object store alongside the FITS image.
 
 If an alternate image type is requested, the order of results for the async job will list the converted images in the requested image type first, followed by the FITS file.
-As with the FITS file, the images will be returned via signed links to the underlying object store with client/server Butler, and unsigned links to the object store until client/server Butler is available.
+As with the FITS file, the images will be returned via signed links to the underlying object store.
 
 The response to a sync request specifying an alternate image type will be a redirect to an object store link for the converted image of that type.
 Sync requests that request an alternate image type must specify only one stencil parameter, since only one image can be returned via the sync API and the alternate image types we expect to support, unlike FITS, do not allow multiple images to be included in the same file. [#]_
@@ -429,8 +405,9 @@ This will be enforced by the service frontend.
 Result storage
 --------------
 
-The output Butler collection will be retained only for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
-It will be read-only for the user (to avoid potential conflicts with running tasks from users manipulating the collections) once ACLs for Butler collections are available through client/server Butler.
+The output cutout object store will only retain files for a limited period of time (to avoid unbounded storage requirements for cutouts that are no longer of interest).
+The time at which the file will be deleted will be advertised in the UWS job metadata via the destruction time parameter.
+The object store will be read-only for the users of the cutout service.
 
 If the user who requested a cutout wishes to retain it, they should store the outputs in local storage, their home directory in the Rubin Science Platform, a personal Butler collection, or some other suitable location.
 
@@ -461,9 +438,9 @@ However, even with a configured result store, the task queuing system only store
 The intent of the task system is for the invoker of the task to ask for the results, at which point they are delivered and then discarded.
 
 The internal result storage is also intended for small amounts of serializable data, not for full image cutouts.
-The natural data store for image cutouts is a Butler collection.
+The natural data store for image cutouts is an object store.
 
-Therefore, each worker task will take responsibility for storing the cutout results in external storage using the Butler.
+Therefore, each worker task will take responsibility for storing the cutout results in an external storage store.
 We will use the system described in :ref:`worker-queue` to route the pointer to that external storage to an actor that will update the UWS database with appropriate results.
 
 The task metadata (success or failure, any error message, the request parameters, and the other metadata for a job required by the UWS specification) will be stored in a SQL database external to the task queue system.
@@ -472,7 +449,7 @@ The other data will be stored by specialized Dramatiq actors via callbacks trigg
 The image cutout web service will then use the SQL database to retrieve information about finished jobs, and ask the task queuing system for information about still-running jobs that have not yet stored their result metadata.
 This will satisfy the UWS API requirements.
 
-We will use Dramatiq result storage, but only to pass the name of the output Butler collection from the cutout actor to the actor that will store that in the database.
+We will use Dramatiq result storage, but only to pass the metadata for the result files from the cutout actor to the actor that will store that in the database.
 
 Waiting for job completion
 --------------------------
@@ -499,12 +476,11 @@ However, job tracking was not yet implemented.
 
 .. _dax_imgserv: https://github.com/lsst/dax_imgserv/
 .. _Celery: https://docs.celeryproject.org/en/stable/index.html
-.. _Redis: https://redis.io/
 
 `uws-api-server`_ is a more complete UWS implementation that uses Kubernetes as the task execution system and as the state tracking repository for jobs.
 This is a clever approach that minimizes the need for additional dependencies, but it requires creating a Kubernetes ``Job`` resource per processing task.
 The resulting overhead of container creation is expected to be prohibitive for the performance and throughput constraints required for the image cutout service.
-This implementation also requires a shared POSIX file system for storage of results, but we want to align the image cutout service with the project direction towards a `client/server Butler`_ and use Butler as the object store for results.
+This implementation also requires a shared POSIX file system for storage of results, but an object store that supports automatic object expiration is a more natural choice for time-bounded cutout storage and for objects that must be returned via a REST API.
 Finally, tracking of completed jobs in this approach is vulnerable to the vagaries of Kubernetes retention of metadata for completed jobs, which may not be sufficiently flexible for our needs.
 
 .. _uws-api-server: https://github.com/lsst-dm/uws-api-server
@@ -544,6 +520,12 @@ For the time being, we'll enqueue tasks synchronously.
 Redis should be extremely fast under normal circumstances, so this hopefully won't cause problems.
 If it does, we can consider other options, such as the ``asgiref.sync_to_async`` decorator.
 
+After completing the initial implementation using Dramatiq, we briefly looked at `arq`_, which has the substantial advantage of supporting asyncio.
+However, arq does not support success and failure callbacks for tasks, which the current architecture relies on.
+It should be possible to use arq by manually queuing the success and failure tasks from inside the ``cutout`` worker instead of relying on callbacks, so we may switch to arq in the future for the asyncio support.
+
+.. _arq: https://arq-docs.helpmanual.io/
+
 Aborting jobs
 -------------
 
@@ -551,7 +533,7 @@ In the initial implementation, we won't support aborting jobs.
 Posting ``PHASE=ABORT`` to the job phase URL will therefore return a 303 redirect to the job URL but will not change the phase.
 (The UWS spec appears to require this behavior.)
 
-In a later version of the service, we will use `dramatiq-abort <https://flared.github.io/dramatiq-abort/>`__ to implement this feature.
+In a later version of the service, we will use `dramatiq-abort <https://flared.github.io/dramatiq-abort/>`__ or the equivalent arq support to implement this feature.
 
 Discovery
 =========

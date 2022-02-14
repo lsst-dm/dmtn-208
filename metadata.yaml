@@ -34,7 +34,7 @@ authors:
 # doi: 10.5281/zenodo.#####
 
 # Copyright statement
-copyright: "2021, Association of Universities for Research in Astronomy, Inc. (AURA)"
+copyright: "2021-2022, Association of Universities for Research in Astronomy, Inc. (AURA)"
 
 # Description. A short, 1-2 sentence statemement used by document indices.
 description: >-
@@ -43,12 +43,12 @@ description: >-
 
 # Abstract, if available
 abstract: >
-  The IVOA SODA (Server-side Operations for Data Access) standard will be used
-  to implement an image cutout service for the Rubin Science Platform
-  following the requirements in LDM-554 4.2.3 and the architecture specified
-  in DMTN-139.  This document discusses implementation considerations and
-  proposes an implementation strategy that uses Dramatiq as a work-queuing
-  system, a pipeline task to perform the cutout, and Butler as the data store.
+ The IVOA SODA (Server-side Operations for Data Access) standard will be used
+ to implement an image cutout service for the Rubin Science Platform following
+ the requirements in LDM-554 4.2.3 and the architecture specified in DMTN-139.
+ This document discusses implementation considerations and describes the
+ chosen implementation strategy, which uses Dramatiq as a work-queuing system
+ and a separate dedicated GCS bucket as a result store.
 
 # URL where this document is published by Read the Docs. e.g. http://sqr-001.lsst.codes
 url: "https://dmtn-208.lsst.io"
