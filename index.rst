@@ -308,7 +308,8 @@ Output
 ~~~~~~
 
 The output cutout should be a FITS image stored in the provided GCS bucket.
-It may be accompanied by a metadata file.
+In the initial implementation, the backend produces only a FITS image.
+Future versions may create other files, such as a metadata file for that image.
 The cutout backend will return the path of the newly-stored files.
 
 The FITS file should contain metadata recording the input parameters, time at which the cutout was performed, and any other desirable provenance information.
