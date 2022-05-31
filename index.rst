@@ -187,7 +187,7 @@ Performing the cutout
 =====================
 
 To ensure the cutout operation is performed by properly-vetted scientific code, the image cutout will be done via a separate package that uses the Rubin Observatory stack.
-Eventually, this package may also need to run pipeline tasks to support multi-step cutout operations, such as cutouts from PVIs that must be reconstructed from raw images.
+Eventually, this package may also need to perform multi-step cutout operations, such as cutouts from PVIs that must be reconstructed from raw images.
 This is not required (or implemented) in the initial implementation.
 
 The cutout backend is responsible for propagating provenance metadata from the source data and the cutout parameters into the resulting FITS file, or into appropriate metadata in the output files for other image types.
@@ -211,7 +211,7 @@ The worker processes run in a container built on top of the Rubin Observatory st
 
 Once a job has been created via the frontend and queued, workers must perform the following actions:
 
-- Parse and store the input parameters in a format suitable for performing the cutout with a pipeline task.
+- Parse and store the input parameters in a format suitable for performing the cutout via the backend.
 - Update the UWS job status to indicate execution is in progress.
 - Perform the cutout, storing the results in the output GCS bucket.
 - Update the UWS job status to indicate execution is complete and store a pointer to the file in the output GCS bucket.
@@ -269,7 +269,7 @@ Given this worker queue design, the worker container can be a generic stack cont
 
 #. The results of ``pip install dramatiq[redis] safir structlog``, so that the worker can talk to the message queue and result store and use the standardized logging framework used by the frontend and other Science Platform components.
 #. The code for performing the cutout.
-   This is expected to be a single (short) file that performs any necessary setup for the pipeline task.
+   This is expected to be a single (short) file that performs any necessary setup for the backend.
 
 This container will be built alongside the container for the frontend and database workers.
 
@@ -472,7 +472,7 @@ It should be possible to do better than this using the message bus underlying th
 Summary of task queuing system survey
 -------------------------------------
 
-Since both the API frontend and the image cutout pipeline task will be written in Python, a Python UWS implementation is desirable.
+Since both the API frontend and the image cutout backend will be written in Python, a Python UWS implementation is desirable.
 An implementation in a different language would require managing it as an additional stand-alone service that the API frontend would send jobs to, and then finding a way for it to execute Python code with those job parameters without access to Python libraries such as a Butler client.
 We therefore ruled out UWS implementations in languages other than Python.
 
