@@ -106,7 +106,8 @@ They may become meaningful later in cutout requests from all-sky coadds and can 
 The initial version of the cutout service will only support a single ``ID`` parameter and a single stencil parameter.
 It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting may not match our needs.
 
-The ``ID`` parameter must be a UUID assigned by the Butler and uniquely identifying a source image.
+The ``ID`` parameter must be the URI to a Butler object uniquely identifying a source image.
+These URIs are of the form ``butler://<tag>/<uuid>``, where ``<tag>`` identifies the Butler repository in which the source image resides.
 The initial implementation will therefore only support cutouts from images that exist in a source Butler collection and thus have a UUID.
 
 Virtual data products will not have a UUID because they will not already exist in a Butler collection, and therefore this ``ID`` scheme cannot be used to identify them.
@@ -146,6 +147,10 @@ For the stateful async protocol, all created jobs are associated with a user.
 Only that user has access to the jobs they create.
 Attempts to access jobs created by other users will return authorization errors.
 
+The underlying image URLs pointing directly to the output cutouts will work for any Internet-connected client, but will expire in 15 minutes.
+Those URLs are not guessable, and the cutout service will only provide them to the user who created the cutout request, but that user could potentially share them with others.
+We don't consider this a security concern; for our purposes, it's roughly equivalent to sharing the resulting FITS file, something over which we have no control.
+
 In the initial implementation, there is no concept of an administrator role or special async API access for administrators.
 Administrators can directly inspect the database if needed, or can impersonate a user if necessary.
 Administrative access to the API without impersonation may be added in future versions if this proves useful.
@@ -155,6 +160,7 @@ Image cutout service access is controlled via the ``read:image`` scope.
 
 The results of a cutout request will only be accessible by the user who requested the cutout.
 If that user wishes to share the results with others, they must download them and put them in some other data store that supports sharing.
+(As mentioned above, they could share the direct URLs to the images, but these URLs will be unwieldy and temporary, so this approach is not recommended.)
 
 Quotas and throttling
 ---------------------
@@ -259,9 +265,9 @@ Given this worker queue design, the worker container can be a generic stack cont
 
 .. [#] Currently, the backend code for performing the cutout is not part of a generic stack container.
        However, the intent is to add it to ``lsst-distrib``.
-       See `RFC-828 <https://jira.lsstcorp.org/browse/RFC-828`__.
+       See `RFC-828 <https://jira.lsstcorp.org/browse/RFC-828>`__.
 
-#. The results of ``pip install dramatiq[redis]``, so that the worker can talk to the message queue and result store.
+#. The results of ``pip install dramatiq[redis] safir structlog``, so that the worker can talk to the message queue and result store and use the standardized logging framework used by the frontend and other Science Platform components.
 #. The code for performing the cutout.
    This is expected to be a single (short) file that performs any necessary setup for the pipeline task.
 
@@ -270,18 +276,18 @@ This container will be built alongside the container for the frontend and databa
 Interface contract
 ------------------
 
-This is the interface contract with the pipelines that will perform cutouts.
+This is the interface contract with the backend that will perform cutouts.
 This is sufficient for the initial implementation, which only supports a single cutout stencil on a single ``ID`` parameter.
 We expect to add multiple ``ID`` parameters and possibly multiple cutout stencils in future revisions of the service.
 
-Also see `DM-32097`_.
+Also see `DM-32097`_, which has additional discussion about the initial implementation.
 
 .. _DM-32097: https://jira.lsstcorp.org/browse/DM-32097
 
 Input
 ~~~~~
 
-- An ``ID``, as a string, which is a UUID for a ``DatasetRef`` of a source image stored in the Butler.
+- An ``ID``, as a string, which is a Butler URI for a ``DatasetRef`` of a source image stored in the Butler.
   This must match the ID returned by ObsTAP queries, SIA, etc.
   The requirements for the image cutout service specify that ``ID`` may refer to a raw, PVI, compressed-PVI, diffim, or coadded image, but for this initial implementation virtual data products are not supported.
 
@@ -313,7 +319,7 @@ Future versions may create other files, such as a metadata file for that image.
 The cutout backend will return the path of the newly-stored files.
 
 The FITS file should contain metadata recording the input parameters, time at which the cutout was performed, and any other desirable provenance information.
-(This can be postponed to a later revision of the pipeline.)
+(This can be postponed to a later revision of the backend.)
 
 Errors
 ~~~~~~
@@ -338,7 +344,7 @@ When supported, the semantics of multiple ``ID`` values and multiple stencils ar
 So two ``ID`` values and a set of stencils consisting of two circles and one polygon would produce six cutouts: two circles and one polygon on both of the two ``ID`` values.
 
 For cutouts with multiple ``ID`` parameters or multiple stencils, there is some controversy currently over whether to return a single FITS file with HDUs for each cutout, or to return N separate FITS files.
-The current SODA standard requires the latter, but we had thought the former would be easier to work with.
+The current SODA standard requires the latter, but the former may be easier to work with.
 Because of this and the error handling problem discussed above, we may deviate from the SODA image cutout standard and define our own SODA operations that returns a single FITS file with improved error handling.
 
 We will eventually need to support cutouts from virtual data products, which will not have UUIDs because they won't already be stored in the Butler.
@@ -371,15 +377,14 @@ As discussed in :ref:`cutout-future`, there is some controversy over the output 
 The initial implementation will not support this.
 
 The FITS file will be provided to the user via a signed link for the location of the FITS file in the cutout object store.
-Signed URLs are temporary and are expected to have a lifetime shorter than the cutout object store, so the image cutout service will generate new signed URLs each time the job results are requested (possibly with caching of up to an hour).
+Signed URLs are temporary and are expected to have a lifetime shorter than the cutout object store.
+The initial implementation will use a signed URL lifetime of 15 minutes.
+Therefore, the image cutout service will generate new signed URLs each time the job results are requested.
 The URL of the job result may therefore change, although the underlying objects will stay the same, and the client should not save the URL for much later use.
 The same will be done for alternate image output formats when those are supported.
 
 The SQL database that holds metadata about async jobs will hold the S3 URL to the objects in the cutout object store.
 That information will be retrieved from there by the API service and used to construct the UWS job status response.
-
-Because the image will be retrieved directly from the underlying object store, the ``Content-Type`` metadata for files downloaded directly by the user must be correct in the object store.
-The current plan is to have ButlerURI automatically set the ``Content-Type`` based on the file extension, and ensure that files stored in a output Butler collection have appropriate extensions.
 
 Alternate image types
 ~~~~~~~~~~~~~~~~~~~~~
@@ -542,10 +547,13 @@ The not-yet-written IVOA Registry service for the API Aspect of the Rubin Scienc
 
 The identifiers returned in the ``obs_publisher_did`` column from ObsTAP queries in the Rubin Science Platform must be usable as ``ID`` parameter values for the image cutout service.
 
-In the short term, the result of ObsTAP queries will contain `DataLink`_ service descriptors for the image cutout service as a SODA service.
-Similar service descriptors will be added to the results of SIA queries once the SIA service has been written.
-This follows the pattern described in section 4.1 of the `SODA`_ specification.
-
-In the longer term, we may instead run a DataLink service and reference it in the ``access_url`` column of ObsTAP queries or via a DataLink "service descriptor" following section 4.2 of the `SODA`_ specification.
+We will run a `DataLink`_ service (currently implemented as the `datalinker`_ package) and reference it in the ``access_url`` column of ObsTAP queries.
+That service is responsible for providing links relevant to a specific result, including a DataLink service descriptor for the SODA-based cutout service.
+This approach follows `section 4.2 of the SODA specification`_.
 
 .. _DataLink: https://www.ivoa.net/documents/DataLink/20150617/REC-DataLink-1.0-20150617.html
+.. _datalinker: https://github.com/lsst-sqre/datalinker
+.. _section 4.2 of the SODA specification: https://www.ivoa.net/documents/SODA/20170517/REC-SODA-1.0.html#tth_sEc4.2
+
+The initial implementation of this DataLink service descriptor will not provide information about the range of valid paramters for a cutout.
+This will be added in a subsequent version.
