@@ -107,8 +107,9 @@ The initial version of the cutout service will only support a single ``ID`` para
 It is likely that we will support multiple stencils and multiple ``ID`` parameters in a future version of the service, but we may not use the API described in SODA for more complex operations, since its requirements for outputs and error reporting may not match our needs.
 
 The ``ID`` parameter must be the URI to a Butler object uniquely identifying a source image.
-These URIs are of the form ``butler://<tag>/<uuid>``, where ``<tag>`` identifies the Butler repository in which the source image resides.
+For the initial implementation, these URIs are of the form ``butler://<tag>/<uuid>``, where ``<tag>`` identifies the Butler repository in which the source image resides.
 The initial implementation will therefore only support cutouts from images that exist in a source Butler collection and thus have a UUID.
+We expect to change the URI format in subsequent revisions.
 
 Virtual data products will not have a UUID because they will not already exist in a Butler collection, and therefore this ``ID`` scheme cannot be used to identify them.
 The most natural way to identify a virtual data product is probably via the Butler data ID tuple.
