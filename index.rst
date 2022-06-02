@@ -408,6 +408,21 @@ This will be enforced by the service frontend.
        It is unlikely there will be a compelling need for a sync request for multiple cutouts with image conversion.
        That use case can use an async request instead.
 
+Masking
+-------
+
+Due to the nature of common image formats including FITS, the resulting cutout is forced to be rectangular.
+However, the cutout stencil requested will often not be rectagular.
+Ideally, the pixels required by the rectangular shape of the returned image but not requested by the cutout stencil would be masked out, allowing the client to (for example) do statistics on the returned image without having to account for data outside the requested range.
+
+This will not be supported by the initial implementation due to performance problems with an early implementation.
+(See DM-35020_ for more details.)
+Support will hopefully be added in a later version.
+
+.. _DM-35020: https://jira.lsstcorp.org/browse/DM-35020
+
+This type of masking is not required by the IVOA SODA standard.
+
 Result storage
 --------------
 
