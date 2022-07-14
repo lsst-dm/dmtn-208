@@ -322,13 +322,15 @@ The cutout backend will return the path of the newly-stored files.
 The FITS file should contain metadata recording the input parameters, time at which the cutout was performed, and any other desirable provenance information.
 (This can be postponed to a later revision of the backend.)
 
+If the requested stencil extends outside the bounds of the image, it is clipped at the edges of the image and a cutout is returned for the clipped stencil (with no error reported).
+
 Errors
 ~~~~~~
 
-A cutout area that's not fully contained within the specified image is an error (except for unbounded ranges).
+If the stencil specifies an area with no overlap with the area covered by the image, an error should be reported.
 The current SODA standard requires that this error be handled by returning success to the async job but setting the result to a ``text/plain`` document starting with an error code.
 This seems highly unexpected and undesirable, so we will not be following that approach.
-Instead, the operation should abort with an error if the cutout area is not fully contained in the specified image.
+Instead, the entire cutout operation should abort with an error in this case.
 
 Errors can be delivered in whatever form is easiest as long as the frontend can recover the details of the error.
 (For example, an exception is fine as long as the user-helpful details of the error are in the exception.)
