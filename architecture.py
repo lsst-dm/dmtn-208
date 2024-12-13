@@ -1,4 +1,4 @@
-"""Source for architecture.png, the architecture diagram."""
+"""Source for the architecture diagram."""
 
 import os
 
@@ -8,8 +8,6 @@ from diagrams.gcp.database import Datastore, SQL
 from diagrams.gcp.network import LoadBalancing
 from diagrams.gcp.storage import PersistentDisk
 from diagrams.onprem.client import User
-
-os.chdir(os.path.dirname(__file__))
 
 graph_attr = {
     "label": "",

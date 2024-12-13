@@ -6,8 +6,8 @@ jobs:
   call-workflow:
     uses: lsst-sqre/rubin-sphinx-technote-workflows/.github/workflows/ci.yaml@v1
     with:
-      apt_packages: graphviz
       handle: dmtn-208
+      apt_packages: graphviz
     secrets:
       ltd_username: ${{ secrets.LTD_USERNAME }}
       ltd_password: ${{ secrets.LTD_PASSWORD }}

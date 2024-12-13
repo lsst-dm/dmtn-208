@@ -1,21 +1,17 @@
-:tocdepth: 1
+################################################
+RSP image cutout service implementation strategy
+################################################
 
-.. sectnum::
+.. abstract::
 
-Abstract
-========
-
-The IVOA `SODA`_ (Server-side Operations for Data Access) standard will be used to implement an image cutout service for the Rubin Science Platform following the requirements in `LDM-554`_ 4.2.3 and the architecture specified in `DMTN-139`_ (not yet published).
-This document discusses implementation considerations and describes the chosen implementation strategy, which uses `Dramatiq`_ as a work-queuing system and a separate dedicated GCS bucket as a result store.
+   The Rubin Science Platform must include an image cutout service following the requirements in :ldm:`554` 4.2.3 and the architecture specified in :dmtn:`139` (not yet published).
+   The implementation uses the IVOA `SODA`_ (Server-side Operations for Data Access) standard.
+   This document discusses implementation considerations and describes the chosen implementation strategy, which uses Dramatiq_ as a work-queuing system and a separate dedicated GCS bucket as a result store.
 
 .. _SODA: https://ivoa.net/documents/SODA/20170517/REC-SODA-1.0.html
-.. _LDM-554: https://ldm-554.lsst.io/
-.. _DMTN-139: https://dmtn-139.lsst.io/
 .. _Dramatiq: https://dramatiq.io/
 
-See `SQR-063`_ for additional discussion of difficulties with implementing the relevant IVOA standards.
-
-.. _SQR-063: https://sqr-063.lsst.io/
+Also see :sqr:`096` for discussion of UWS job storage, and :sqr:`063` for discussion of difficulties with implementing the relevant IVOA standards.
 
 Implementation goals
 ====================
@@ -23,7 +19,7 @@ Implementation goals
 This design satisfies the following high-level goals:
 
 #. Following SQuaRE's standards for new web APIs, the web API layer should use FastAPI.
-   This will satisfy the desired feature from `DMTN-139`_ that each web service publish an OpenAPI v3 service description, since FastAPI does that automatically.
+   This will satisfy the desired feature from :dmtn:`139` that each web service publish an OpenAPI v3 service description, since FastAPI does that automatically.
 
 #. There must be a clear division of responsibility between the service framework, which implements the IVOA API, and the data manipulation that produces the cutout.
    This ensures that data manipulation is applied consistently in both Rubin data processing and VO services, and that the service takes advantage of code validated as part of the science pipeline QA process.
@@ -36,7 +32,7 @@ This design satisfies the following high-level goals:
    This causes too many complications for building containers and coordinating Python package versions.
    Only the worker processes should require the stack, and should have a minimum of additional dependencies to limit how many Python modules we need to add to or layer on top of the stack.
 
-#. The portions of the image cutout service that implement general IVOA standards, such as `DALI`_ and `UWS`_ components, will be designed to be separated into a library or framework and reused in future services.
+#. The portions of the image cutout service that implement general IVOA standards, such as DALI_ and UWS_ components, will be designed to be separated into a library or framework and reused in future services.
    The implementation will also serve as a model from which we will derive a template for future IVOA API services.
 
 #. Cutouts should be retrieved directly from the underlying data store that holds them, rather than retrieved and then re-sent by an intermediate web server.
@@ -48,18 +44,16 @@ This design satisfies the following high-level goals:
 Architecture summary
 ====================
 
-The image cutout service will be a `FastAPI`_ Python service running as a Kubernetes ``Deployment`` inside the Rubin Science Platform and, as with every other RSP service, using `Gafaelfawr`_ for authentication and authorization.
-Image cutout requests will be dispatched via `Dramatiq`_ to worker processes created via a separate Kubernetes ``Deployment`` in the same cluster.
-`Redis`_ will be used as the message bus and temporary metadata result store for Dramatiq.
+The image cutout service will be a FastAPI_ Python service running as a Kubernetes ``Deployment`` inside the Rubin Science Platform and, as with every other RSP service, using Gafaelfawr_ for authentication and authorization.
+Image cutout requests will be dispatched via Dramatiq_ to worker processes created via a separate Kubernetes ``Deployment`` in the same cluster.
+Redis_ will be used as the message bus and temporary metadata result store for Dramatiq.
 
 .. _FastAPI: https://fastapi.tiangolo.com/
 .. _Gafaelfawr: https://gafaelfawr.lsst.io/
 .. _Redis: https://redis.io/
 
-Image cutouts will be stored in a dedicated `GCS`_ bucket with an object expiration time set, so cutouts will be automatically purged after some period of time.
+Image cutouts will be stored in a dedicated :abbr:`GCS (Google Cloud Storage)` bucket with an object expiration time set, so cutouts will be automatically purged after some period of time.
 The results of the cutout request will be served from that bucket.
-
-.. _GCS: https://cloud.google.com/storage
 
 The Dramatiq workers will be separated into two pools using different queues.
 One will perform the cutouts and will run on the stack container.
@@ -69,7 +63,7 @@ The storage used by cutout results will be temporary and garbage-collected after
 The retention time for the initial implementation is 30 days, but this can easily be changed.
 Users who wish to preserve the results for longer will need to transfer their data elsewhere, such as local storage, their home directory on the Rubin Science Platform, or a personal Butler collection.
 
-Metadata about requests will be stored by the cutout workers in a SQL database, using `Cloud SQL`_ for installations on Google Cloud Platform and an in-cluster `PostgreSQL`_ server elsewhere.
+Metadata about requests will be stored by the cutout workers in a SQL database, using `Cloud SQL`_ for installations on Google Cloud Platform and an in-cluster PostgreSQL_ server elsewhere.
 The same SQL store will be used by the API service to satisfy requests for async job lists, status, and other metadata.
 
 .. _Cloud SQL: https://cloud.google.com/sql
@@ -77,15 +71,12 @@ The same SQL store will be used by the API service to satisfy requests for async
 
 Here is the overall design in diagram form.
 
-.. figure:: /_static/architecture.png
-   :name: Image cutout service architecture
-
-   Image cutout service architecture
+.. diagrams:: architecture.py
 
 API service
 ===========
 
-The service frontend providing the SODA API will use the `FastAPI`_ framework.
+The service frontend providing the SODA API will use the FastAPI_ framework.
 
 The initial implementation won't implement DALI-examples.
 This will be added in a later version.
@@ -120,7 +111,7 @@ The initial implementation of the image cutout service will only return FITS fil
 However, we expect to need support for other image types such as JPEG in the future.
 When that support is added, it can be requested via a ``RESPONSEFORMAT=image/jpeg`` parameter.
 
-The `UWS`_ specification supports providing a quote for how long an async query is expected to take before it is started.
+The UWS_ specification supports providing a quote for how long an async query is expected to take before it is started.
 The initial implementation will always set the quote to ``xsi:nil``, indicating that it does not know how long the request will take.
 However, hopefully a future improvement of the service will provide real quote values based on an estimate of the complexity of the cutout request, since this information would be useful for users deciding whether to make a complex cutout request.
 
@@ -139,7 +130,7 @@ Once it has completed, the client can retrieve metadata about the job, including
 To avoid unnecessarily multiplying API implementations, the sync mode will be implemented as a wrapper around the async mode.
 Specifically, a sync request will start an async job, wait for that job to complete, and then redirect to the primary result URL for the async job.
 
-Further considerations for UWS support and async jobs are discussed in :ref:`UWS implementation <uws-impl>`.
+Further considerations for UWS support and async jobs are discussed in :ref:`uws-impl`.
 
 Permission model
 ----------------
@@ -198,10 +189,8 @@ The cutout workers are long-running Python processes that work through queues of
 The same Butler instance and thus cached resources such as open database connections is used for the lifetime of the process.
 This avoids paying the cost of loading Python libraries and preparing supporting resources for each cutout action.
 
-Once there is a client/server Butler service, Butler operations to perform the cutout will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049`_.
+Once there is a client/server Butler service, Butler operations to perform the cutout will be done as the user requesting the cutout, using a delegated internal token as described in `SQR-049 <https://sqr-049.lsst.io/#internal-tokens>`__.
 The mechanism to pass that delegated internal token from the API frontend to the cutout backend has not yet been designed.
-
-.. _SQR-049: https://sqr-049.lsst.io/#internal-tokens
 
 .. _worker-queue:
 
@@ -281,7 +270,7 @@ This is the interface contract with the backend that will perform cutouts.
 This is sufficient for the initial implementation, which only supports a single cutout stencil on a single ``ID`` parameter.
 We expect to add multiple ``ID`` parameters and possibly multiple cutout stencils in future revisions of the service.
 
-Also see `DM-32097`_, which has additional discussion about the initial implementation.
+Also see DM-32097_, which has additional discussion about the initial implementation.
 
 .. _DM-32097: https://jira.lsstcorp.org/browse/DM-32097
 
@@ -434,7 +423,7 @@ The object store will be read-only for the users of the cutout service.
 
 If the user who requested a cutout wishes to retain it, they should store the outputs in local storage, their home directory in the Rubin Science Platform, a personal Butler collection, or some other suitable location.
 
-The `SODA`_ specification also allows a request to specify a VOSpace location in which to store the results, but does not specify a protocol for making that request.
+The SODA_ specification also allows a request to specify a VOSpace location in which to store the results, but does not specify a protocol for making that request.
 The initial implementation of the image cutout service will not support this, but it may be considered in a future version.
 
 .. _uws-impl:
@@ -442,11 +431,11 @@ The initial implementation of the image cutout service will not support this, bu
 UWS implementation
 ==================
 
-The IVOA `UWS`_ (Universal Worker Service) standard describes the behavior of async IVOA interfaces.
+The IVOA UWS_ (Universal Worker Service) standard describes the behavior of async IVOA interfaces.
 The image cutout service must have an async API to support operations that may take more than a few minutes to complete, and thus requires a UWS implementation to provide the relevant API.
 We will use that implementation to perform all cutout operations.
 
-After a survey of available UWS implementations, we chose to write a new one on top of the Python `Dramatiq`_ distributed task queue.
+After a survey of available UWS implementations, we chose to write a new one on top of the Python Dramatiq_ distributed task queue.
 
 .. _task-storage:
 
@@ -494,28 +483,27 @@ Since both the API frontend and the image cutout backend will be written in Pyth
 An implementation in a different language would require managing it as an additional stand-alone service that the API frontend would send jobs to, and then finding a way for it to execute Python code with those job parameters without access to Python libraries such as a Butler client.
 We therefore ruled out UWS implementations in languages other than Python.
 
-`dax_imgserv`_, the previous draft Rubin Observatory implementation of an image cutout service, which predates other design discussions discussed here, contains the skeleton of a Python UWS implementation built on `Celery`_ and `Redis`_.
+dax_imgserv_, the previous draft Rubin Observatory implementation of an image cutout service, which predates other design discussions discussed here, contains the skeleton of a Python UWS implementation built on Celery_ and Redis_.
 However, job tracking was not yet implemented.
 
 .. _dax_imgserv: https://github.com/lsst/dax_imgserv/
 .. _Celery: https://docs.celeryproject.org/en/stable/index.html
 
-`uws-api-server`_ is a more complete UWS implementation that uses Kubernetes as the task execution system and as the state tracking repository for jobs.
+uws-api-server_ is a more complete UWS implementation that uses Kubernetes as the task execution system and as the state tracking repository for jobs.
 This is a clever approach that minimizes the need for additional dependencies, but it requires creating a Kubernetes ``Job`` resource per processing task.
 The resulting overhead of container creation is expected to be prohibitive for the performance and throughput constraints required for the image cutout service.
 This implementation also requires a shared POSIX file system for storage of results, but an object store that supports automatic object expiration is a more natural choice for time-bounded cutout storage and for objects that must be returned via a REST API.
 Finally, tracking of completed jobs in this approach is vulnerable to the vagaries of Kubernetes retention of metadata for completed jobs, which may not be sufficiently flexible for our needs.
 
 .. _uws-api-server: https://github.com/lsst-dm/uws-api-server
-.. _client/server Butler: https://dmtn-176.lsst.io/
 
 We did not find any other re-usable Python UWS server implementations (as opposed to clients, of which there are several).
 
 Task queue options
 ------------------
 
-`Celery`_ is the standard Python task queuing system, so it was our default choice unless a different task queue system looked compelling.
-However, `Dramatiq`_ appeared to have some advantages over Celery, and there are multiple reports of other teams who have switched to Dramatiq from Celery due to instability issues and other frustration.
+Celery_ is the standard Python task queuing system, so it was our default choice unless a different task queue system looked compelling.
+However, Dramatiq_ appeared to have some advantages over Celery, and there are multiple reports of other teams who have switched to Dramatiq from Celery due to instability issues and other frustration.
 
 Both frameworks are similar, so switching between them if necessary should not be difficult.
 Compared to Celery, Dramatiq offers per-task prioritization without creating separate priority workers.
@@ -528,7 +516,7 @@ There is some increased risk with Dramatiq that it will be abandoned and we will
 However, it appears to have growing popularity and some major corporate users, which is reassuring.
 It should also not be too difficult to switch to Celery later if we need to.
 
-Dramatiq supports either `Redis`_, `RabbitMQ`_, or Amazon SQS as the underlying message bus.
+Dramatiq supports either Redis_, RabbitMQ_, or Amazon SQS as the underlying message bus.
 Both Dramatiq and Celery prefer RabbitMQ and the Celery documentation warns that Redis can lose data in some unclean shutdown scenarios.
 However, we are already using Redis as a component of the Rubin Science Platform as a backing store for the authentication system, so we will use Redis as the message bus to avoid adding a new infrastructure component until this is shown to be a reliability issue.
 
@@ -543,7 +531,7 @@ For the time being, we'll enqueue tasks synchronously.
 Redis should be extremely fast under normal circumstances, so this hopefully won't cause problems.
 If it does, we can consider other options, such as the ``asgiref.sync_to_async`` decorator.
 
-After completing the initial implementation using Dramatiq, we briefly looked at `arq`_, which has the substantial advantage of supporting asyncio.
+After completing the initial implementation using Dramatiq, we briefly looked at arq_, which has the substantial advantage of supporting asyncio.
 However, arq does not support success and failure callbacks for tasks, which the current architecture relies on.
 It should be possible to use arq by manually queuing the success and failure tasks from inside the ``cutout`` worker instead of relying on callbacks, so we may switch to arq in the future for the asyncio support.
 
@@ -565,7 +553,7 @@ The not-yet-written IVOA Registry service for the API Aspect of the Rubin Scienc
 
 The identifiers returned in the ``obs_publisher_did`` column from ObsTAP queries in the Rubin Science Platform must be usable as ``ID`` parameter values for the image cutout service.
 
-We will run a `DataLink`_ service (currently implemented as the `datalinker`_ package) and reference it in the ``access_url`` column of ObsTAP queries.
+We will run a DataLink_ service (currently implemented as the datalinker_ package) and reference it in the ``access_url`` column of ObsTAP queries.
 That service is responsible for providing links relevant to a specific result, including a DataLink service descriptor for the SODA-based cutout service.
 This approach follows `section 4.2 of the SODA specification`_.
 

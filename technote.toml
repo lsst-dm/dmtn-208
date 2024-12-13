@@ -1,0 +1,20 @@
+[technote]
+id = "DMTN-208"
+series_id = "DMTN"
+canonical_url = "https://dmtn-208.lsst.io/"
+github_url = "https://github.com/lsst-dm/dmtn-208"
+github_default_branch = "main"
+date_created = 2021-09-17
+date_updated = 2024-12-13
+organization.name = "Vera C. Rubin Observatory"
+organization.ror = "https://ror.org/048g3cy84"
+license.id = "CC-BY-4.0"
+
+[[technote.authors]]
+name = {given = "Russ", family = "Allbery"}
+internal_id = "allberyr"
+
+[[technote.authors.affiliations]]
+name = "Vera C. Rubin Observatory Project Office"
+internal_id = "RubinObs"
+address = "950 N. Cherry Ave., Tucson, AZ 85719, USA"
