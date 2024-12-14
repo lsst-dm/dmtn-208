@@ -14,6 +14,7 @@ graph_attr = {
     "nodesep": "0.2",
     "pad": "0.2",
     "ranksep": "0.75",
+    "splines": "spline",
 }
 
 node_attr = {
@@ -34,14 +35,13 @@ with Diagram(
 ):
     user = User("End user")
 
-    butler = Datastore("Butler repository")
     images = Datastore("Image store")
     datastore = Datastore("Cutout store")
 
     with Cluster("Kubernetes"):
         ingress = LoadBalancing("NGINX ingress")
         gafaelfawr = KubernetesEngine("Gafaelfawr")
-        metadata = SQL("UWS database")
+        butler = KubernetesEngine("Butler API")
 
         with Cluster("Cutout service"):
             api = KubernetesEngine("API service")
@@ -49,11 +49,16 @@ with Diagram(
             uws_workers = KubernetesEngine("Workers (database)")
             redis = PersistentDisk("Redis")
 
+        with Cluster("Wobbly"):
+            wobbly = KubernetesEngine("API")
+            metadata = SQL("UWS database")
+
     user >> ingress >> api
-    api - Edge(label="Dramatiq") - redis
-    api - metadata << uws_workers
+    api - Edge(label="arq") - redis
+    api >> wobbly << uws_workers
+    wobbly >> metadata
     ingress >> gafaelfawr
-    redis - Edge(label="Dramatiq") - cutout_workers >> datastore >> api
-    cutout_workers >> butler >> images
-    redis - Edge(label="Dramatiq") - uws_workers
+    redis - Edge(label="arq") - cutout_workers >> datastore
+    cutout_workers << butler << images
+    redis - Edge(label="arq") - uws_workers
     user << datastore

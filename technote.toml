@@ -18,3 +18,9 @@ internal_id = "allberyr"
 name = "Vera C. Rubin Observatory Project Office"
 internal_id = "RubinObs"
 address = "950 N. Cherry Ave., Tucson, AZ 85719, USA"
+
+[technote.sphinx]
+nitpick = true
+
+[technote.sphinx.intersphinx.projects]
+python = "https://docs.python.org/3/"
